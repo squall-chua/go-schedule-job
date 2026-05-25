@@ -3,6 +3,7 @@ package goschedule_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -99,5 +100,65 @@ func TestScheduler_Reschedule(t *testing.T) {
 	got, _ := store.ClaimDue(context.Background(), "default", time.Now().Add(time.Second), 1, "w", time.Now().Add(time.Minute))
 	if len(got) != 1 {
 		t.Errorf("expected rescheduled job claimable: %+v", got)
+	}
+}
+
+func TestScheduler_Start_RunsJob(t *testing.T) {
+	store := memstore.New()
+	done := make(chan struct{}, 1)
+	s, _ := gs.NewScheduler(
+		gs.WithStore(store),
+		gs.WithPollInterval(20*time.Millisecond),
+	)
+	s.Register("ping", func(_ context.Context, _ []byte) error {
+		done <- struct{}{}
+		return nil
+	})
+	if _, err := s.Now("ping", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	go func() {
+		_ = s.Start(ctx)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("job did not run within timeout")
+	}
+}
+
+func TestScheduler_Start_RetriesThenFails(t *testing.T) {
+	store := memstore.New()
+	var attempts int32
+	failed := make(chan struct{}, 1)
+	s, _ := gs.NewScheduler(
+		gs.WithStore(store),
+		gs.WithPollInterval(10*time.Millisecond),
+		gs.WithDefaultBackoff(gs.ExponentialBackoff{Base: 5 * time.Millisecond, Cap: 50 * time.Millisecond}),
+		gs.WithHooks(gs.Hooks{
+			OnFailure: func(_ gs.JobID, _ string, _ string, _ int, _ error) { failed <- struct{}{} },
+		}),
+	)
+	s.Register("flaky", func(_ context.Context, _ []byte) error {
+		atomic.AddInt32(&attempts, 1)
+		return errors.New("nope")
+	})
+	_, _ = s.Now("flaky", nil, gs.WithMaxAttempts(3))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() { _ = s.Start(ctx) }()
+
+	select {
+	case <-failed:
+	case <-ctx.Done():
+		t.Fatalf("terminal failure not observed; attempts so far: %d", atomic.LoadInt32(&attempts))
+	}
+	if got := atomic.LoadInt32(&attempts); got != 3 {
+		t.Errorf("expected exactly 3 attempts, got %d", got)
 	}
 }

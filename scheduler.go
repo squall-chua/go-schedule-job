@@ -170,3 +170,54 @@ func (s *Scheduler) Cancel(id JobID) error {
 func (s *Scheduler) Reschedule(id JobID, newTime time.Time) error {
 	return s.store.Reschedule(context.Background(), id, newTime)
 }
+
+// Start boots dispatchers, worker pools, and the janitor. Blocks until ctx is cancelled.
+func (s *Scheduler) Start(ctx context.Context) error {
+	var wg sync.WaitGroup
+
+	// Per-queue worker channels.
+	channels := map[string]chan Job{}
+	for queue, concurrency := range s.queues {
+		ch := make(chan Job, concurrency)
+		channels[queue] = ch
+
+		d := &dispatcher{
+			queue:      queue,
+			batchSize:  concurrency,
+			pollEvery:  s.pollInterval,
+			visibility: s.visibilityTimeout,
+			workerID:   s.workerID,
+			store:      s.store,
+			clock:      s.clock,
+			logger:     s.logger,
+			out:        ch,
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			d.run(ctx)
+		}()
+
+		wp := &workerPool{
+			concurrency: concurrency,
+			in:          ch,
+			store:       s.store,
+			scheduler:   s,
+			clock:       s.clock,
+			logger:      s.logger,
+		}
+		wp.run(ctx) // spawns internal goroutines; they exit on ctx.Done
+	}
+
+	_ = channels
+
+	// Wait for ctx cancellation, then grace shutdown.
+	<-ctx.Done()
+	doneCh := make(chan struct{})
+	go func() { wg.Wait(); close(doneCh) }()
+	select {
+	case <-doneCh:
+	case <-time.After(s.shutdownGrace):
+	}
+	return nil
+}
