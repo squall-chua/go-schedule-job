@@ -154,3 +154,36 @@ func TestMemStore_Reschedule(t *testing.T) {
 		t.Errorf("rescheduled job should be claimable now, got %d", len(got))
 	}
 }
+
+func TestMemStore_FailRejectsPendingJob(t *testing.T) {
+	ctx := context.Background()
+	s := memstore.New()
+	now := time.Now()
+	_ = s.Save(ctx, gs.Job{ID: "pending-j", Queue: "default", RunAt: now, State: gs.StatePending, MaxAttempts: 3})
+	// Fail on a still-pending job should not silently corrupt the heap.
+	if err := s.Fail(ctx, "pending-j", "boom", now.Add(time.Second)); err == nil {
+		t.Fatal("expected error when failing a still-pending job")
+	}
+	// The original pending job must still be claimable exactly once.
+	got, _ := s.ClaimDue(ctx, "default", now, 10, "w", now.Add(time.Minute))
+	if len(got) != 1 || got[0].ID != "pending-j" {
+		t.Fatalf("expected pending job to remain claimable exactly once, got %+v", got)
+	}
+}
+
+func TestMemStore_FailExhaustsAttemptsAndStops(t *testing.T) {
+	ctx := context.Background()
+	s := memstore.New()
+	now := time.Now()
+	j := gs.Job{ID: "j", Queue: "default", RunAt: now, State: gs.StatePending, MaxAttempts: 1}
+	_ = s.Save(ctx, j)
+	_, _ = s.ClaimDue(ctx, "default", now, 1, "w", now.Add(time.Minute))
+	if err := s.Fail(ctx, "j", "boom", now.Add(time.Second)); err != nil {
+		t.Fatalf("fail: %v", err)
+	}
+	// After exhausting attempts the job must not reappear.
+	got, _ := s.ClaimDue(ctx, "default", now.Add(time.Hour), 10, "w", now.Add(time.Hour).Add(time.Minute))
+	if len(got) != 0 {
+		t.Fatalf("exhausted job should not reappear, got %+v", got)
+	}
+}

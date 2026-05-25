@@ -148,6 +148,9 @@ func (s *Store) Fail(_ context.Context, id gs.JobID, errMsg string, nextAttemptA
 	if !ok {
 		return gs.ErrJobNotFound
 	}
+	if e.job.State != gs.StateClaimed {
+		return gs.ErrJobNotFound
+	}
 	e.job.Attempt++
 	e.job.LastError = errMsg
 	if e.job.MaxAttempts > 0 && e.job.Attempt >= e.job.MaxAttempts {
