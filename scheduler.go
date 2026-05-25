@@ -43,6 +43,9 @@ func WithDelivery(d Delivery) JobOption     { return func(j *Job) { j.Delivery =
 // withCodec is used by typed dispatch helpers; not exported.
 func withCodec(name string) JobOption { return func(j *Job) { j.CodecName = name } }
 
+// WithCatchup enables catching up missed fires for recurring jobs. Default is false.
+func WithCatchup(c bool) JobOption { return func(j *Job) { j.catchup = c } }
+
 // SchedulerOption configures the scheduler at construction.
 type SchedulerOption func(*Scheduler)
 
@@ -210,6 +213,16 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	}
 
 	_ = channels
+
+	runner := &recurringRunner{
+		store:      s.store,
+		clock:      s.clock,
+		logger:     s.logger,
+		workerID:   s.workerID,
+		leaseEvery: s.pollInterval,
+	}
+	wg.Add(1)
+	go func() { defer wg.Done(); runner.run(ctx) }()
 
 	// Wait for ctx cancellation, then grace shutdown.
 	<-ctx.Done()

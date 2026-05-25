@@ -79,6 +79,9 @@ type Job struct {
 	RecurringID   JobID // empty for one-shot jobs; references RecurringSpec.ID
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+
+	// Internal recurring flag carried via JobOption (not persisted by Stores).
+	catchup bool
 }
 
 // RecurringSpec is the canonical record for a recurring schedule.
