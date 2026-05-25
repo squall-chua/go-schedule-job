@@ -1,7 +1,9 @@
 package goschedule
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"runtime"
 	"sync"
@@ -119,4 +121,44 @@ func (s *Scheduler) handler(name string) (Handler, bool) {
 	defer s.mu.RUnlock()
 	h, ok := s.handlers[name]
 	return h, ok
+}
+
+// At schedules name+payload to run at t. opts override defaults.
+func (s *Scheduler) At(t time.Time, name string, payload []byte, opts ...JobOption) (JobID, error) {
+	if _, ok := s.handler(name); !ok {
+		return "", fmt.Errorf("goschedule: no handler registered for %q", name)
+	}
+	j := Job{
+		ID:          JobID(uuid.NewString()),
+		Name:        name,
+		Queue:       "default",
+		Priority:    PriorityNormal,
+		Payload:     payload,
+		RunAt:       t,
+		State:       StatePending,
+		MaxAttempts: 3,
+		CreatedAt:   s.clock.Now(),
+	}
+	for _, opt := range opts {
+		opt(&j)
+	}
+	if _, ok := s.queues[j.Queue]; !ok {
+		return "", fmt.Errorf("goschedule: unknown queue %q", j.Queue)
+	}
+	if err := s.store.Save(context.Background(), j); err != nil {
+		return "", err
+	}
+	s.hooks.fireEnqueue(j.ID, j.Name, j.Queue)
+	logEnqueue(s.logger, j.ID, j.Name, j.Queue, j.RunAt)
+	return j.ID, nil
+}
+
+// Now schedules for immediate execution (next dispatch tick).
+func (s *Scheduler) Now(name string, payload []byte, opts ...JobOption) (JobID, error) {
+	return s.At(s.clock.Now(), name, payload, opts...)
+}
+
+// After schedules after a delay.
+func (s *Scheduler) After(d time.Duration, name string, payload []byte, opts ...JobOption) (JobID, error) {
+	return s.At(s.clock.Now().Add(d), name, payload, opts...)
 }
