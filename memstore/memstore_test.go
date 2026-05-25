@@ -83,3 +83,19 @@ func TestMemStore_Ack(t *testing.T) {
 		t.Errorf("acked job should be gone, got %d", len(got))
 	}
 }
+
+func TestMemStore_AckRejectsPendingJob(t *testing.T) {
+	ctx := context.Background()
+	s := memstore.New()
+	now := time.Now()
+	_ = s.Save(ctx, gs.Job{ID: "pending-j", Queue: "default", RunAt: now, State: gs.StatePending})
+	// Ack on a still-pending job should not succeed silently.
+	if err := s.Ack(ctx, "pending-j"); err == nil {
+		t.Fatal("expected error when Acking a still-pending job")
+	}
+	// And the job must still be claimable afterward.
+	got, _ := s.ClaimDue(ctx, "default", now, 1, "w", now.Add(time.Minute))
+	if len(got) != 1 || got[0].ID != "pending-j" {
+		t.Fatalf("expected pending job to remain claimable, got %+v", got)
+	}
+}

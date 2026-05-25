@@ -133,8 +133,10 @@ func (s *Store) Ack(_ context.Context, id gs.JobID) error {
 	if !ok {
 		return gs.ErrJobNotFound
 	}
+	if e.job.State != gs.StateClaimed {
+		return gs.ErrJobNotFound
+	}
 	e.job.State = gs.StateSucceeded
-	// Drop from byID; nothing further references it.
 	delete(s.byID, id)
 	return nil
 }
