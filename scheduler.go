@@ -224,6 +224,10 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	wg.Add(1)
 	go func() { defer wg.Done(); runner.run(ctx) }()
 
+	jan := &janitor{store: s.store, clock: s.clock, logger: s.logger, workerID: s.workerID, every: s.heartbeatInterval}
+	wg.Add(1)
+	go func() { defer wg.Done(); jan.run(ctx) }()
+
 	// Wait for ctx cancellation, then grace shutdown.
 	<-ctx.Done()
 	doneCh := make(chan struct{})
