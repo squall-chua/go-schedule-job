@@ -1,6 +1,9 @@
 package goschedule
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // BackoffStrategy yields the next attempt delay given the failed attempt number (1-indexed).
 type BackoffStrategy interface {
@@ -19,13 +22,22 @@ func (e ExponentialBackoff) Next(attempt int) time.Duration {
 	}
 	d := e.Base
 	for i := 1; i < attempt; i++ {
+		prev := d
 		d *= 2
+		if d < prev {
+			// Overflow — cap at maximum non-negative duration.
+			d = math.MaxInt64
+			break
+		}
 		if e.Cap > 0 && d >= e.Cap {
 			return e.Cap
 		}
 	}
 	if e.Cap > 0 && d > e.Cap {
 		return e.Cap
+	}
+	if d < 0 {
+		d = math.MaxInt64
 	}
 	return d
 }

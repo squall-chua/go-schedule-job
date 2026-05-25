@@ -48,12 +48,12 @@ func (s State) Terminal() bool {
 	return s == StateSucceeded || s == StateFailed || s == StateCancelled
 }
 
-// Delivery semantics.
+// Delivery semantics. Only DeliveryAtLeastOnce is implemented in v1.
+// (At-most-once is reserved for a future release when persistent stores can ack-before-run.)
 type Delivery uint8
 
 const (
 	DeliveryAtLeastOnce Delivery = iota
-	DeliveryAtMostOnce
 )
 
 // Handler executes a job. Returning a non-nil error triggers retry / failure handling.

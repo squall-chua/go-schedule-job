@@ -63,7 +63,6 @@ func buildRecurringSpec(s *Scheduler, name string, payload []byte, opts []JobOpt
 		Priority:    tmp.Priority,
 		Payload:     payload,
 		CodecName:   tmp.CodecName,
-		Delivery:    tmp.Delivery,
 		Timeout:     tmp.Timeout,
 		MaxAttempts: tmp.MaxAttempts,
 		Catchup:     tmp.catchup,
@@ -134,8 +133,13 @@ func (r *recurringRunner) computeFires(spec RecurringSpec, now time.Time) []time
 		return fires
 	}
 	at := spec.NextRunAt
-	for {
+	const maxCatchup = 1000 // safety bound to prevent runaway loops on degenerate specs
+	for i := 0; i < maxCatchup; i++ {
 		next := r.advance(spec, at)
+		if !next.After(at) {
+			// Degenerate spec: advance didn't advance. Stop here.
+			break
+		}
 		if next.After(now) {
 			break
 		}
@@ -146,7 +150,13 @@ func (r *recurringRunner) computeFires(spec RecurringSpec, now time.Time) []time
 }
 
 func (r *recurringRunner) nextAfter(spec RecurringSpec, now time.Time) time.Time {
-	return r.advance(spec, now)
+	// Anchor on the previous scheduled fire time, not on wall-clock now, to prevent drift.
+	next := r.advance(spec, spec.NextRunAt)
+	// If we've fallen so far behind that next is still in the past, advance until we're ahead.
+	for !next.After(now) {
+		next = r.advance(spec, next)
+	}
+	return next
 }
 
 func (r *recurringRunner) advance(spec RecurringSpec, from time.Time) time.Time {

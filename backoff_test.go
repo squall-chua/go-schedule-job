@@ -29,3 +29,11 @@ func TestExponentialBackoff_CapsOut(t *testing.T) {
 		t.Errorf("expected cap of 5s, got %v", got)
 	}
 }
+
+func TestExponentialBackoff_DoesNotOverflow(t *testing.T) {
+	b := ExponentialBackoff{Base: time.Millisecond, Cap: 0} // no cap
+	// Attempt 100 would overflow without the guard.
+	if got := b.Next(100); got < 0 {
+		t.Errorf("expected non-negative duration, got %v", got)
+	}
+}

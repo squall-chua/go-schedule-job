@@ -38,7 +38,6 @@ func WithQueue(name string) JobOption       { return func(j *Job) { j.Queue = na
 func WithPriority(p Priority) JobOption     { return func(j *Job) { j.Priority = p } }
 func WithMaxAttempts(n int) JobOption       { return func(j *Job) { j.MaxAttempts = n } }
 func WithTimeout(d time.Duration) JobOption { return func(j *Job) { j.Timeout = d } }
-func WithDelivery(d Delivery) JobOption     { return func(j *Job) { j.Delivery = d } }
 
 // withCodec is used by typed dispatch helpers; not exported.
 func withCodec(name string) JobOption { return func(j *Job) { j.CodecName = name } }

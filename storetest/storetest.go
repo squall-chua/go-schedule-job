@@ -27,6 +27,7 @@ func Run(t *testing.T, f Factory) {
 	t.Run("RecurringCRUD", func(t *testing.T) { testRecurringCRUD(t, f) })
 	t.Run("AcquireRecurringLeaseAtLeastOnce", func(t *testing.T) { testRecurringLease(t, f) })
 	t.Run("QueueSize", func(t *testing.T) { testQueueSize(t, f) })
+	t.Run("MissingJobErrors", func(t *testing.T) { testMissingJobErrors(t, f) })
 }
 
 func mkJob(id, queue string, runAt time.Time, p gs.Priority) gs.Job {
@@ -204,5 +205,23 @@ func testQueueSize(t *testing.T, f Factory) {
 	}
 	if n != 2 {
 		t.Fatalf("want 2, got %d", n)
+	}
+}
+
+func testMissingJobErrors(t *testing.T, f Factory) {
+	s, done := f(t)
+	defer done()
+	ctx := context.Background()
+	if err := s.Ack(ctx, "missing"); err != gs.ErrJobNotFound {
+		t.Errorf("Ack(missing): want ErrJobNotFound, got %v", err)
+	}
+	if err := s.Fail(ctx, "missing", "x", time.Now()); err != gs.ErrJobNotFound {
+		t.Errorf("Fail(missing): want ErrJobNotFound, got %v", err)
+	}
+	if err := s.Cancel(ctx, "missing"); err != gs.ErrJobNotFound {
+		t.Errorf("Cancel(missing): want ErrJobNotFound, got %v", err)
+	}
+	if err := s.Reschedule(ctx, "missing", time.Now()); err != gs.ErrJobNotFound {
+		t.Errorf("Reschedule(missing): want ErrJobNotFound, got %v", err)
 	}
 }
