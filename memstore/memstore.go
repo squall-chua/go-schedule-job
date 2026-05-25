@@ -140,3 +140,59 @@ func (s *Store) Ack(_ context.Context, id gs.JobID) error {
 	delete(s.byID, id)
 	return nil
 }
+
+func (s *Store) Fail(_ context.Context, id gs.JobID, errMsg string, nextAttemptAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.byID[id]
+	if !ok {
+		return gs.ErrJobNotFound
+	}
+	e.job.Attempt++
+	e.job.LastError = errMsg
+	if e.job.MaxAttempts > 0 && e.job.Attempt >= e.job.MaxAttempts {
+		e.job.State = gs.StateFailed
+		delete(s.byID, id)
+		return nil
+	}
+	e.job.State = gs.StatePending
+	e.job.RunAt = nextAttemptAt
+	e.job.LockedBy = ""
+	e.job.LockedUntil = time.Time{}
+	heap.Push(s.heap(e.job.Queue), e)
+	return nil
+}
+
+func (s *Store) Cancel(_ context.Context, id gs.JobID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.byID[id]
+	if !ok {
+		return gs.ErrJobNotFound
+	}
+	if e.job.State != gs.StatePending {
+		return gs.ErrJobNotPending
+	}
+	if e.index >= 0 {
+		heap.Remove(s.heap(e.job.Queue), e.index)
+	}
+	delete(s.byID, id)
+	return nil
+}
+
+func (s *Store) Reschedule(_ context.Context, id gs.JobID, newTime time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.byID[id]
+	if !ok {
+		return gs.ErrJobNotFound
+	}
+	if e.job.State != gs.StatePending {
+		return gs.ErrJobNotPending
+	}
+	e.job.RunAt = newTime
+	if e.index >= 0 {
+		heap.Fix(s.heap(e.job.Queue), e.index)
+	}
+	return nil
+}

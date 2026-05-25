@@ -99,3 +99,58 @@ func TestMemStore_AckRejectsPendingJob(t *testing.T) {
 		t.Fatalf("expected pending job to remain claimable, got %+v", got)
 	}
 }
+
+func TestMemStore_FailReschedulesForRetry(t *testing.T) {
+	ctx := context.Background()
+	s := memstore.New()
+	now := time.Now()
+	_ = s.Save(ctx, gs.Job{ID: "j", Queue: "default", RunAt: now, State: gs.StatePending, MaxAttempts: 3})
+	_, _ = s.ClaimDue(ctx, "default", now, 1, "w", now.Add(time.Minute))
+
+	nextAt := now.Add(2 * time.Second)
+	if err := s.Fail(ctx, "j", "boom", nextAt); err != nil {
+		t.Fatalf("fail: %v", err)
+	}
+	got, _ := s.ClaimDue(ctx, "default", nextAt.Add(time.Millisecond), 1, "w", nextAt.Add(time.Minute))
+	if len(got) != 1 || got[0].Attempt != 1 || got[0].LastError != "boom" {
+		t.Errorf("expected re-enqueued job with attempt=1, got %+v", got)
+	}
+}
+
+func TestMemStore_CancelRemovesPending(t *testing.T) {
+	ctx := context.Background()
+	s := memstore.New()
+	_ = s.Save(ctx, gs.Job{ID: "j", Queue: "default", RunAt: time.Now(), State: gs.StatePending})
+	if err := s.Cancel(ctx, "j"); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	got, _ := s.ClaimDue(ctx, "default", time.Now(), 10, "w", time.Now().Add(time.Minute))
+	if len(got) != 0 {
+		t.Errorf("cancelled job should not be claimed, got %d", len(got))
+	}
+}
+
+func TestMemStore_CancelClaimedReturnsErrJobNotPending(t *testing.T) {
+	ctx := context.Background()
+	s := memstore.New()
+	now := time.Now()
+	_ = s.Save(ctx, gs.Job{ID: "j", Queue: "default", RunAt: now, State: gs.StatePending})
+	_, _ = s.ClaimDue(ctx, "default", now, 1, "w", now.Add(time.Minute))
+	if err := s.Cancel(ctx, "j"); err != gs.ErrJobNotPending {
+		t.Errorf("expected ErrJobNotPending, got %v", err)
+	}
+}
+
+func TestMemStore_Reschedule(t *testing.T) {
+	ctx := context.Background()
+	s := memstore.New()
+	now := time.Now()
+	_ = s.Save(ctx, gs.Job{ID: "j", Queue: "default", RunAt: now.Add(time.Hour), State: gs.StatePending})
+	if err := s.Reschedule(ctx, "j", now); err != nil {
+		t.Fatalf("reschedule: %v", err)
+	}
+	got, _ := s.ClaimDue(ctx, "default", now, 10, "w", now.Add(time.Minute))
+	if len(got) != 1 {
+		t.Errorf("rescheduled job should be claimable now, got %d", len(got))
+	}
+}
