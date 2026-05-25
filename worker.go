@@ -3,6 +3,7 @@ package goschedule
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"runtime/debug"
 	"time"
@@ -110,7 +111,7 @@ type panicError struct {
 }
 
 func (p *panicError) Error() string {
-	return "panic in handler: " + toString(p.r)
+	return "panic in handler: " + toString(p.r) + "\n" + string(p.stack)
 }
 
 func toString(v any) string {
@@ -120,6 +121,6 @@ func toString(v any) string {
 	case error:
 		return s.Error()
 	default:
-		return ""
+		return fmt.Sprintf("%v", v)
 	}
 }
