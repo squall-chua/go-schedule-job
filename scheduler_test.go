@@ -73,3 +73,31 @@ func TestScheduler_Now_RunAtIsCurrentTime(t *testing.T) {
 		t.Errorf("expected claimable: %+v", got)
 	}
 }
+
+func TestScheduler_Cancel(t *testing.T) {
+	store := memstore.New()
+	s, _ := gs.NewScheduler(gs.WithStore(store))
+	s.Register("x", func(_ context.Context, _ []byte) error { return nil })
+	id, _ := s.At(time.Now().Add(time.Hour), "x", nil)
+	if err := s.Cancel(id); err != nil {
+		t.Fatal(err)
+	}
+	n, _ := store.QueueSize(context.Background(), "default")
+	if n != 0 {
+		t.Errorf("expected empty queue, got %d", n)
+	}
+}
+
+func TestScheduler_Reschedule(t *testing.T) {
+	store := memstore.New()
+	s, _ := gs.NewScheduler(gs.WithStore(store))
+	s.Register("x", func(_ context.Context, _ []byte) error { return nil })
+	id, _ := s.At(time.Now().Add(time.Hour), "x", nil)
+	if err := s.Reschedule(id, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := store.ClaimDue(context.Background(), "default", time.Now().Add(time.Second), 1, "w", time.Now().Add(time.Minute))
+	if len(got) != 1 {
+		t.Errorf("expected rescheduled job claimable: %+v", got)
+	}
+}

@@ -162,3 +162,11 @@ func (s *Scheduler) Now(name string, payload []byte, opts ...JobOption) (JobID, 
 func (s *Scheduler) After(d time.Duration, name string, payload []byte, opts ...JobOption) (JobID, error) {
 	return s.At(s.clock.Now().Add(d), name, payload, opts...)
 }
+
+func (s *Scheduler) Cancel(id JobID) error {
+	return s.store.Cancel(context.Background(), id)
+}
+
+func (s *Scheduler) Reschedule(id JobID, newTime time.Time) error {
+	return s.store.Reschedule(context.Background(), id, newTime)
+}
