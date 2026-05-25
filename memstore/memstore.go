@@ -199,3 +199,58 @@ func (s *Store) Reschedule(_ context.Context, id gs.JobID, newTime time.Time) er
 	}
 	return nil
 }
+
+func (s *Store) UpsertRecurring(_ context.Context, spec gs.RecurringSpec) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recurring[spec.ID] = spec
+	return nil
+}
+
+func (s *Store) ListRecurring(_ context.Context) ([]gs.RecurringSpec, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]gs.RecurringSpec, 0, len(s.recurring))
+	for _, r := range s.recurring {
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+func (s *Store) DeleteRecurring(_ context.Context, id gs.JobID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.recurring, id)
+	return nil
+}
+
+func (s *Store) AcquireRecurringLease(_ context.Context, _ gs.JobID, _ time.Time, _ string) (bool, error) {
+	return true, nil
+}
+
+func (s *Store) UpdateRecurringNextRun(_ context.Context, id gs.JobID, nextRunAt, lastFireAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r, ok := s.recurring[id]; ok {
+		r.NextRunAt = nextRunAt
+		r.LastFireAt = lastFireAt
+		s.recurring[id] = r
+	}
+	return nil
+}
+
+func (s *Store) Heartbeat(_ context.Context, _ string, _ time.Time) error { return nil }
+
+func (s *Store) RecoverStale(_ context.Context, _ time.Time) (int, error) { return 0, nil }
+
+func (s *Store) QueueSize(_ context.Context, queue string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, ok := s.queues[queue]
+	if !ok {
+		return 0, nil
+	}
+	return h.Len(), nil
+}
+
+var _ gs.Store = (*Store)(nil)

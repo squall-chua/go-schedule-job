@@ -187,3 +187,56 @@ func TestMemStore_FailExhaustsAttemptsAndStops(t *testing.T) {
 		t.Fatalf("exhausted job should not reappear, got %+v", got)
 	}
 }
+
+func TestMemStore_RecurringUpsertListDelete(t *testing.T) {
+	ctx := context.Background()
+	s := memstore.New()
+	spec := gs.RecurringSpec{ID: "r1", Name: "tick", Queue: "default", Every: time.Second}
+	if err := s.UpsertRecurring(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := s.ListRecurring(ctx)
+	if len(list) != 1 || list[0].ID != "r1" {
+		t.Errorf("list: got %+v", list)
+	}
+	if err := s.DeleteRecurring(ctx, "r1"); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = s.ListRecurring(ctx)
+	if len(list) != 0 {
+		t.Errorf("expected empty list, got %+v", list)
+	}
+}
+
+func TestMemStore_AcquireRecurringLease_AlwaysTrue(t *testing.T) {
+	ctx := context.Background()
+	s := memstore.New()
+	ok, err := s.AcquireRecurringLease(ctx, "r1", time.Now().Add(time.Minute), "w1")
+	if err != nil || !ok {
+		t.Errorf("expected (true, nil), got (%v, %v)", ok, err)
+	}
+}
+
+func TestMemStore_QueueSize(t *testing.T) {
+	ctx := context.Background()
+	s := memstore.New()
+	now := time.Now()
+	_ = s.Save(ctx, gs.Job{ID: "a", Queue: "default", RunAt: now, State: gs.StatePending})
+	_ = s.Save(ctx, gs.Job{ID: "b", Queue: "default", RunAt: now, State: gs.StatePending})
+	n, err := s.QueueSize(ctx, "default")
+	if err != nil || n != 2 {
+		t.Errorf("expected 2, got (%d, %v)", n, err)
+	}
+}
+
+func TestMemStore_HeartbeatAndRecoverStaleAreNoops(t *testing.T) {
+	ctx := context.Background()
+	s := memstore.New()
+	if err := s.Heartbeat(ctx, "w1", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.RecoverStale(ctx, time.Now())
+	if err != nil || n != 0 {
+		t.Errorf("expected (0, nil), got (%d, %v)", n, err)
+	}
+}
