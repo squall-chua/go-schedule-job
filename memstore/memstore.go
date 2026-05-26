@@ -76,6 +76,7 @@ func (s *Store) heap(queue string) *queueHeap {
 
 // --- Public methods ---
 
+// Save inserts or updates a job by ID.
 func (s *Store) Save(_ context.Context, j gs.Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -96,6 +97,7 @@ func (s *Store) Save(_ context.Context, j gs.Job) error {
 	return nil
 }
 
+// ClaimDue pops up to n due jobs from the named queue, ordered by priority then run_at.
 func (s *Store) ClaimDue(_ context.Context, queue string, now time.Time, n int, workerID string, lockUntil time.Time) ([]gs.Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -126,6 +128,7 @@ func (s *Store) ClaimDue(_ context.Context, queue string, now time.Time, n int, 
 	return out, nil
 }
 
+// Ack marks a claimed job as successfully completed.
 func (s *Store) Ack(_ context.Context, id gs.JobID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -141,6 +144,7 @@ func (s *Store) Ack(_ context.Context, id gs.JobID) error {
 	return nil
 }
 
+// Fail records an attempt failure. The job is re-queued for retry at nextAttemptAt.
 func (s *Store) Fail(_ context.Context, id gs.JobID, errMsg string, nextAttemptAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -166,6 +170,7 @@ func (s *Store) Fail(_ context.Context, id gs.JobID, errMsg string, nextAttemptA
 	return nil
 }
 
+// Cancel marks a pending job as cancelled. Returns ErrJobNotFound or ErrJobNotPending if not applicable.
 func (s *Store) Cancel(_ context.Context, id gs.JobID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -183,6 +188,7 @@ func (s *Store) Cancel(_ context.Context, id gs.JobID) error {
 	return nil
 }
 
+// Reschedule changes a pending job's run_at. Returns ErrJobNotFound or ErrJobNotPending if not applicable.
 func (s *Store) Reschedule(_ context.Context, id gs.JobID, newTime time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -200,6 +206,7 @@ func (s *Store) Reschedule(_ context.Context, id gs.JobID, newTime time.Time) er
 	return nil
 }
 
+// UpsertRecurring inserts or replaces a recurring schedule.
 func (s *Store) UpsertRecurring(_ context.Context, spec gs.RecurringSpec) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -207,6 +214,7 @@ func (s *Store) UpsertRecurring(_ context.Context, spec gs.RecurringSpec) error 
 	return nil
 }
 
+// ListRecurring returns all recurring schedules.
 func (s *Store) ListRecurring(_ context.Context) ([]gs.RecurringSpec, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -217,6 +225,7 @@ func (s *Store) ListRecurring(_ context.Context) ([]gs.RecurringSpec, error) {
 	return out, nil
 }
 
+// DeleteRecurring removes a recurring schedule by ID.
 func (s *Store) DeleteRecurring(_ context.Context, id gs.JobID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -224,10 +233,12 @@ func (s *Store) DeleteRecurring(_ context.Context, id gs.JobID) error {
 	return nil
 }
 
+// AcquireRecurringLease is a no-op in the single-process memstore and always returns true.
 func (s *Store) AcquireRecurringLease(_ context.Context, _ gs.JobID, _ time.Time, _ string) (bool, error) {
 	return true, nil
 }
 
+// UpdateRecurringNextRun records the next firing time and last fire time on a recurring schedule.
 func (s *Store) UpdateRecurringNextRun(_ context.Context, id gs.JobID, nextRunAt, lastFireAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -239,10 +250,13 @@ func (s *Store) UpdateRecurringNextRun(_ context.Context, id gs.JobID, nextRunAt
 	return nil
 }
 
+// Heartbeat is a no-op for the single-process memstore.
 func (s *Store) Heartbeat(_ context.Context, _ string, _ time.Time) error { return nil }
 
+// RecoverStale is a no-op for the single-process memstore.
 func (s *Store) RecoverStale(_ context.Context, _ time.Time) (int, error) { return 0, nil }
 
+// QueueSize returns the count of pending jobs in the named queue.
 func (s *Store) QueueSize(_ context.Context, queue string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

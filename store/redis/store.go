@@ -92,8 +92,7 @@ func parseAddr(addr string) (*redis.UniversalOptions, error) {
 // Close releases the underlying client.
 func (s *Store) Close() error { return s.rdb.Close() }
 
-// Save persists or upserts the job. The HASH stores the full record; the
-// pending ZSET (one per (queue, priority)) carries the ordering index.
+// Save inserts or updates a job by ID.
 func (s *Store) Save(ctx context.Context, j gs.Job) error {
 	state := j.State
 	if state == 0 {
@@ -139,6 +138,7 @@ func priorityBuckets(queue string) []string {
 	}
 }
 
+// ClaimDue claims up to n due jobs from the named queue, ordered by priority then run_at.
 func (s *Store) ClaimDue(ctx context.Context, queue string, now time.Time, n int, workerID string, lockUntil time.Time) ([]gs.Job, error) {
 	buckets := priorityBuckets(queue)
 	keys := append(buckets, claimedKey)
@@ -187,6 +187,7 @@ redis.call('DEL', job)
 return 'ok'
 `)
 
+// Ack marks a claimed job as successfully completed.
 func (s *Store) Ack(ctx context.Context, id gs.JobID) error {
 	res, err := ackScript.Run(ctx, s.rdb,
 		[]string{jobKey(id), claimedKey},
@@ -201,6 +202,7 @@ func (s *Store) Ack(ctx context.Context, id gs.JobID) error {
 	return nil
 }
 
+// Fail records an attempt failure. The job is re-queued for retry at nextAttemptAt.
 func (s *Store) Fail(ctx context.Context, id gs.JobID, errMsg string, nextAttemptAt time.Time) error {
 	// Look up queue + priority so we can target the right pending ZSET.
 	fields, err := s.rdb.HMGet(ctx, jobKey(id), "queue", "priority").Result()
@@ -228,6 +230,7 @@ func (s *Store) Fail(ctx context.Context, id gs.JobID, errMsg string, nextAttemp
 	return nil
 }
 
+// Cancel marks a pending job as cancelled. Returns gs.ErrJobNotFound or gs.ErrJobNotPending if not applicable.
 func (s *Store) Cancel(ctx context.Context, id gs.JobID) error {
 	fields, err := s.rdb.HMGet(ctx, jobKey(id), "queue", "priority").Result()
 	if err != nil {
@@ -259,6 +262,7 @@ func (s *Store) Cancel(ctx context.Context, id gs.JobID) error {
 	}
 }
 
+// Heartbeat records a liveness ping for the given worker.
 func (s *Store) Heartbeat(ctx context.Context, workerID string, now time.Time) error {
 	if err := s.rdb.HSet(ctx, workersKey, workerID, formatTime(now)).Err(); err != nil {
 		return fmt.Errorf("redis heartbeat: %w", err)
@@ -266,6 +270,7 @@ func (s *Store) Heartbeat(ctx context.Context, workerID string, now time.Time) e
 	return nil
 }
 
+// RecoverStale re-queues jobs whose claims have expired and returns the count recovered.
 func (s *Store) RecoverStale(ctx context.Context, _ time.Time) (int, error) {
 	res, err := recoverStaleScript.Run(ctx, s.rdb,
 		[]string{claimedKey},
@@ -281,6 +286,7 @@ func (s *Store) RecoverStale(ctx context.Context, _ time.Time) (int, error) {
 	return int(n), nil
 }
 
+// QueueSize returns the count of pending jobs in the named queue.
 func (s *Store) QueueSize(ctx context.Context, queue string) (int, error) {
 	pipe := s.rdb.Pipeline()
 	cmds := make([]*redis.IntCmd, 0, 4)
@@ -297,6 +303,7 @@ func (s *Store) QueueSize(ctx context.Context, queue string) (int, error) {
 	return int(total), nil
 }
 
+// Reschedule changes a pending job's run_at. Returns gs.ErrJobNotFound or gs.ErrJobNotPending if not applicable.
 func (s *Store) Reschedule(ctx context.Context, id gs.JobID, newTime time.Time) error {
 	fields, err := s.rdb.HMGet(ctx, jobKey(id), "queue", "priority").Result()
 	if err != nil {
@@ -370,6 +377,7 @@ func deserializeRecurring(m map[string]string) gs.RecurringSpec {
 	}
 }
 
+// UpsertRecurring inserts or replaces a recurring schedule.
 func (s *Store) UpsertRecurring(ctx context.Context, spec gs.RecurringSpec) error {
 	_, err := s.rdb.TxPipelined(ctx, func(p redis.Pipeliner) error {
 		p.HSet(ctx, recurringKey(spec.ID), serializeRecurring(spec))
@@ -382,6 +390,7 @@ func (s *Store) UpsertRecurring(ctx context.Context, spec gs.RecurringSpec) erro
 	return nil
 }
 
+// ListRecurring returns all recurring schedules.
 func (s *Store) ListRecurring(ctx context.Context) ([]gs.RecurringSpec, error) {
 	ids, err := s.rdb.SMembers(ctx, recurringAllKey).Result()
 	if err != nil {
@@ -409,6 +418,7 @@ func (s *Store) ListRecurring(ctx context.Context) ([]gs.RecurringSpec, error) {
 	return out, nil
 }
 
+// DeleteRecurring removes a recurring schedule by ID.
 func (s *Store) DeleteRecurring(ctx context.Context, id gs.JobID) error {
 	_, err := s.rdb.TxPipelined(ctx, func(p redis.Pipeliner) error {
 		p.Del(ctx, recurringKey(id))
@@ -421,6 +431,7 @@ func (s *Store) DeleteRecurring(ctx context.Context, id gs.JobID) error {
 	return nil
 }
 
+// UpdateRecurringNextRun records the next firing time and last fire time on a recurring schedule.
 func (s *Store) UpdateRecurringNextRun(ctx context.Context, id gs.JobID, nextRunAt, lastFireAt time.Time) error {
 	if err := s.rdb.HSet(ctx, recurringKey(id),
 		"next_run_at", formatTime(nextRunAt),
@@ -431,6 +442,7 @@ func (s *Store) UpdateRecurringNextRun(ctx context.Context, id gs.JobID, nextRun
 	return nil
 }
 
+// AcquireRecurringLease attempts to claim exclusive responsibility for firing the recurring schedule until leaseUntil. Returns true if the caller holds the lease.
 func (s *Store) AcquireRecurringLease(ctx context.Context, specID gs.JobID, leaseUntil time.Time, workerID string) (bool, error) {
 	ttl := time.Until(leaseUntil)
 	if ttl <= 0 {

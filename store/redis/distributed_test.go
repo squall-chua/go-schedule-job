@@ -24,7 +24,7 @@ func twoStores(t *testing.T) (a, b *redis.Store, mr *miniredis.Miniredis) {
 	}
 	sb, err := redis.New(ctx, mr.Addr())
 	if err != nil {
-		sa.Close()
+		_ = sa.Close()
 		t.Fatalf("New(b): %v", err)
 	}
 	t.Cleanup(func() { _ = sa.Close(); _ = sb.Close() })
@@ -98,8 +98,14 @@ func TestRedisStore_ContestedRecurringLeaseExclusivity(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(2)
 		var okA, okB bool
-		go func() { defer wg.Done(); okA, _ = a.AcquireRecurringLease(ctx, "r1", time.Now().Add(time.Minute), "wa") }()
-		go func() { defer wg.Done(); okB, _ = b.AcquireRecurringLease(ctx, "r1", time.Now().Add(time.Minute), "wb") }()
+		go func() {
+			defer wg.Done()
+			okA, _ = a.AcquireRecurringLease(ctx, "r1", time.Now().Add(time.Minute), "wa")
+		}()
+		go func() {
+			defer wg.Done()
+			okB, _ = b.AcquireRecurringLease(ctx, "r1", time.Now().Add(time.Minute), "wb")
+		}()
 		wg.Wait()
 		if okA == okB {
 			t.Fatalf("race %d: exactly one acquire must succeed, got a=%v b=%v", r, okA, okB)

@@ -39,13 +39,13 @@ func TestSQLiteStore_OpenAppliesSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	// Opening again should be idempotent (CREATE TABLE IF NOT EXISTS).
 	s2, err := sqlite.New(path)
 	if err != nil {
 		t.Fatalf("re-open: %v", err)
 	}
-	s2.Close()
+	_ = s2.Close()
 }
 
 func TestSQLiteStore_SaveInsertsRow(t *testing.T) {
@@ -416,7 +416,7 @@ func TestSQLiteStore_SurvivesReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer s2.Close()
+	defer func() { _ = s2.Close() }()
 
 	got, err := s2.ClaimDue(ctx, "default", now, 10, "w", now.Add(time.Minute))
 	if err != nil {

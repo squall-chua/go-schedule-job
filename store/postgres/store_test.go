@@ -449,7 +449,7 @@ func TestPostgresStore_ListenNotifiesOnSave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	if err := s.Save(ctx, gs.Job{ID: "j", Queue: "default", Name: "n", RunAt: now, State: gs.StatePending, MaxAttempts: 3, CreatedAt: now}); err != nil {
@@ -470,7 +470,7 @@ func TestPostgresStore_ListenIgnoresOtherQueues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	// Save into a different queue; listener must NOT fire.
 	now := time.Now().UTC().Truncate(time.Microsecond)

@@ -50,7 +50,7 @@ func (s *Scheduler) Cron(expr, name string, payload []byte, opts ...JobOption) (
 	return spec.ID, nil
 }
 
-func buildRecurringSpec(s *Scheduler, name string, payload []byte, opts []JobOption) RecurringSpec {
+func buildRecurringSpec(_ *Scheduler, name string, payload []byte, opts []JobOption) RecurringSpec {
 	// Reuse JobOption by applying to a Job and copying fields back.
 	tmp := Job{Queue: "default", Priority: PriorityNormal, MaxAttempts: 3}
 	for _, opt := range opts {

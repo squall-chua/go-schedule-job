@@ -16,6 +16,7 @@ type ExponentialBackoff struct {
 	Cap  time.Duration
 }
 
+// Next returns the delay before the next attempt — Base * 2^(attempt-1), capped at Cap.
 func (e ExponentialBackoff) Next(attempt int) time.Duration {
 	if attempt < 1 {
 		attempt = 1

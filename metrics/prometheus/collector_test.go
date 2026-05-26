@@ -61,19 +61,19 @@ type fakeStore struct {
 	queueErr   error
 }
 
-func (f *fakeStore) Save(context.Context, gs.Job) error                  { return nil }
+func (f *fakeStore) Save(context.Context, gs.Job) error { return nil }
 func (f *fakeStore) ClaimDue(context.Context, string, time.Time, int, string, time.Time) ([]gs.Job, error) {
 	return nil, nil
 }
-func (f *fakeStore) Ack(context.Context, gs.JobID) error                 { return nil }
-func (f *fakeStore) Fail(context.Context, gs.JobID, string, time.Time) error { return nil }
-func (f *fakeStore) Cancel(context.Context, gs.JobID) error              { return nil }
-func (f *fakeStore) Reschedule(context.Context, gs.JobID, time.Time) error { return nil }
-func (f *fakeStore) Heartbeat(context.Context, string, time.Time) error  { return nil }
-func (f *fakeStore) RecoverStale(context.Context, time.Time) (int, error) { return 0, nil }
-func (f *fakeStore) UpsertRecurring(context.Context, gs.RecurringSpec) error { return nil }
+func (f *fakeStore) Ack(context.Context, gs.JobID) error                       { return nil }
+func (f *fakeStore) Fail(context.Context, gs.JobID, string, time.Time) error   { return nil }
+func (f *fakeStore) Cancel(context.Context, gs.JobID) error                    { return nil }
+func (f *fakeStore) Reschedule(context.Context, gs.JobID, time.Time) error     { return nil }
+func (f *fakeStore) Heartbeat(context.Context, string, time.Time) error        { return nil }
+func (f *fakeStore) RecoverStale(context.Context, time.Time) (int, error)      { return 0, nil }
+func (f *fakeStore) UpsertRecurring(context.Context, gs.RecurringSpec) error   { return nil }
 func (f *fakeStore) ListRecurring(context.Context) ([]gs.RecurringSpec, error) { return nil, nil }
-func (f *fakeStore) DeleteRecurring(context.Context, gs.JobID) error     { return nil }
+func (f *fakeStore) DeleteRecurring(context.Context, gs.JobID) error           { return nil }
 func (f *fakeStore) AcquireRecurringLease(context.Context, gs.JobID, time.Time, string) (bool, error) {
 	return false, nil
 }
@@ -264,7 +264,7 @@ func TestCollect_SamplesQueueSize(t *testing.T) {
 		c.Collect(metricsCh)
 		close(metricsCh)
 	}()
-	for range metricsCh {
+	for range metricsCh { //nolint:revive
 	}
 
 	if v := testutil.ToFloat64(c.metrics.queueSize.WithLabelValues("default")); v != 7 {
@@ -284,7 +284,7 @@ func TestCollect_QueueSizeError_DoesNotPanic(t *testing.T) {
 		defer close(metricsCh)
 		c.Collect(metricsCh)
 	}()
-	for range metricsCh {
+	for range metricsCh { //nolint:revive
 	}
 	// queueSize stays at zero — no panic, no metric corruption.
 	if v := testutil.ToFloat64(c.metrics.queueSize.WithLabelValues("default")); v != 0 {

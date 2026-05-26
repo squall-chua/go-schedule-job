@@ -82,6 +82,7 @@ ON CONFLICT(id) DO UPDATE SET
     updated_at=excluded.updated_at
 `
 
+// Save inserts or updates a job by ID.
 func (s *Store) Save(ctx context.Context, j gs.Job) error {
 	state := j.State
 	if state == 0 {
@@ -119,12 +120,13 @@ UPDATE jobs SET state = ?, locked_by = ?, locked_until = ?, updated_at = ?
 WHERE id = ?
 `
 
+// ClaimDue claims up to n due jobs from the named queue, ordered by priority then run_at.
 func (s *Store) ClaimDue(ctx context.Context, queue string, now time.Time, n int, workerID string, lockUntil time.Time) ([]gs.Job, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite claim begin: %w", err)
 	}
-	defer tx.Rollback() // safe to call after Commit
+	defer func() { _ = tx.Rollback() }() // safe to call after Commit
 
 	rows, err := tx.QueryContext(ctx, claimSelectSQL, queue, int(gs.StatePending), toUnixNano(now), n)
 	if err != nil {
@@ -134,7 +136,7 @@ func (s *Store) ClaimDue(ctx context.Context, queue string, now time.Time, n int
 	for rows.Next() {
 		j, err := scanJob(rows)
 		if err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
 		out = append(out, j)
@@ -142,7 +144,7 @@ func (s *Store) ClaimDue(ctx context.Context, queue string, now time.Time, n int
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("sqlite claim iterate: %w", err)
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	for i := range out {
 		out[i].State = gs.StateClaimed
@@ -165,6 +167,7 @@ func (s *Store) ClaimDue(ctx context.Context, queue string, now time.Time, n int
 
 const ackSQL = `DELETE FROM jobs WHERE id = ? AND state = ?`
 
+// Ack marks a claimed job as successfully completed.
 func (s *Store) Ack(ctx context.Context, id gs.JobID) error {
 	res, err := s.db.ExecContext(ctx, ackSQL, string(id), int(gs.StateClaimed))
 	if err != nil {
@@ -196,12 +199,13 @@ UPDATE jobs SET
 WHERE id = ? AND state = ?
 `
 
+// Fail records an attempt failure. The job is re-queued for retry at nextAttemptAt.
 func (s *Store) Fail(ctx context.Context, id gs.JobID, errMsg string, nextAttemptAt time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("sqlite fail begin: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	var attempt, maxAttempts int
 	row := tx.QueryRowContext(ctx, failSelectSQL, string(id), int(gs.StateClaimed))
@@ -235,12 +239,13 @@ func (s *Store) Fail(ctx context.Context, id gs.JobID, errMsg string, nextAttemp
 const cancelSelectSQL = `SELECT state FROM jobs WHERE id = ?`
 const cancelDeleteSQL = `DELETE FROM jobs WHERE id = ?`
 
+// Cancel marks a pending job as cancelled. Returns gs.ErrJobNotFound or gs.ErrJobNotPending if not applicable.
 func (s *Store) Cancel(ctx context.Context, id gs.JobID) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("sqlite cancel begin: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var state int
 	row := tx.QueryRowContext(ctx, cancelSelectSQL, string(id))
 	if err := row.Scan(&state); err != nil {
@@ -266,12 +271,13 @@ func (s *Store) Cancel(ctx context.Context, id gs.JobID) error {
 const rescheduleSelectSQL = `SELECT state FROM jobs WHERE id = ?`
 const rescheduleUpdateSQL = `UPDATE jobs SET run_at = ?, updated_at = ? WHERE id = ?`
 
+// Reschedule changes a pending job's run_at. Returns gs.ErrJobNotFound or gs.ErrJobNotPending if not applicable.
 func (s *Store) Reschedule(ctx context.Context, id gs.JobID, newTime time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("sqlite reschedule begin: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var state int
 	row := tx.QueryRowContext(ctx, rescheduleSelectSQL, string(id))
 	if err := row.Scan(&state); err != nil {
@@ -294,6 +300,7 @@ func (s *Store) Reschedule(ctx context.Context, id gs.JobID, newTime time.Time) 
 
 // --- Heartbeat / RecoverStale / QueueSize ---
 
+// Heartbeat records a liveness ping for the given worker.
 func (s *Store) Heartbeat(_ context.Context, _ string, _ time.Time) error {
 	return nil
 }
@@ -303,6 +310,7 @@ UPDATE jobs SET state = ?, locked_by = '', locked_until = 0, updated_at = ?
 WHERE state = ? AND locked_until > 0 AND locked_until < ?
 `
 
+// RecoverStale re-queues jobs whose claims have expired and returns the count recovered.
 func (s *Store) RecoverStale(ctx context.Context, now time.Time) (int, error) {
 	res, err := s.db.ExecContext(ctx, recoverStaleSQL,
 		int(gs.StatePending), toUnixNano(now), int(gs.StateClaimed), toUnixNano(now),
@@ -319,6 +327,7 @@ func (s *Store) RecoverStale(ctx context.Context, now time.Time) (int, error) {
 
 const queueSizeSQL = `SELECT COUNT(*) FROM jobs WHERE queue = ? AND state = ?`
 
+// QueueSize returns the count of pending jobs in the named queue.
 func (s *Store) QueueSize(ctx context.Context, queue string) (int, error) {
 	var n int
 	row := s.db.QueryRowContext(ctx, queueSizeSQL, queue, int(gs.StatePending))
@@ -362,6 +371,7 @@ const updateRecurringNextRunSQL = `
 UPDATE recurring SET next_run_at = ?, last_fire_at = ? WHERE id = ?
 `
 
+// UpsertRecurring inserts or replaces a recurring schedule.
 func (s *Store) UpsertRecurring(ctx context.Context, spec gs.RecurringSpec) error {
 	catch := 0
 	if spec.Catchup {
@@ -380,12 +390,13 @@ func (s *Store) UpsertRecurring(ctx context.Context, spec gs.RecurringSpec) erro
 	return nil
 }
 
+// ListRecurring returns all recurring schedules.
 func (s *Store) ListRecurring(ctx context.Context) ([]gs.RecurringSpec, error) {
 	rows, err := s.db.QueryContext(ctx, listRecurringSQL)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite list recurring: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []gs.RecurringSpec
 	for rows.Next() {
 		var id, name, queue, codec, cron, leasedBy string
@@ -409,6 +420,7 @@ func (s *Store) ListRecurring(ctx context.Context) ([]gs.RecurringSpec, error) {
 	return out, rows.Err()
 }
 
+// DeleteRecurring removes a recurring schedule by ID.
 func (s *Store) DeleteRecurring(ctx context.Context, id gs.JobID) error {
 	if _, err := s.db.ExecContext(ctx, deleteRecurringSQL, string(id)); err != nil {
 		return fmt.Errorf("sqlite delete recurring: %w", err)
@@ -416,6 +428,7 @@ func (s *Store) DeleteRecurring(ctx context.Context, id gs.JobID) error {
 	return nil
 }
 
+// UpdateRecurringNextRun records the next firing time and last fire time on a recurring schedule.
 func (s *Store) UpdateRecurringNextRun(ctx context.Context, id gs.JobID, nextRunAt, lastFireAt time.Time) error {
 	if _, err := s.db.ExecContext(ctx, updateRecurringNextRunSQL,
 		toUnixNano(nextRunAt), toUnixNano(lastFireAt), string(id),
@@ -434,6 +447,7 @@ WHERE id = ? AND (lease_until = 0 OR lease_until < ? OR leased_by = ?)
 
 const leaseSpecExistsSQL = `SELECT COUNT(*) FROM recurring WHERE id = ?`
 
+// AcquireRecurringLease attempts to claim exclusive responsibility for firing the recurring schedule until leaseUntil. Returns true if the caller holds the lease.
 func (s *Store) AcquireRecurringLease(ctx context.Context, specID gs.JobID, leaseUntil time.Time, workerID string) (bool, error) {
 	now := time.Now()
 	res, err := s.db.ExecContext(ctx, acquireLeaseSQL,

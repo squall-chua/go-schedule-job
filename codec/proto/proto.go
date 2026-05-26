@@ -41,6 +41,7 @@ type Codec struct{}
 // New returns the default Protocol Buffers codec.
 func New() gs.Codec { return Codec{} }
 
+// Name returns the codec identifier "proto".
 func (Codec) Name() string { return "proto" }
 
 // Encode marshals v to wire-format bytes. v must implement proto.Message.

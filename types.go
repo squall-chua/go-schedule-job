@@ -11,6 +11,7 @@ type JobID string
 // Priority controls relative ordering at claim time. Higher runs sooner.
 type Priority uint8
 
+// Priority levels, ordered from lowest to highest. Higher values are claimed first.
 const (
 	PriorityLow      Priority = 0
 	PriorityNormal   Priority = 1
@@ -36,6 +37,7 @@ func (p Priority) String() string {
 // State is a job's lifecycle stage.
 type State uint8
 
+// Job lifecycle states.
 const (
 	StatePending State = iota
 	StateClaimed
@@ -44,6 +46,7 @@ const (
 	StateCancelled
 )
 
+// Terminal reports whether s is a final state — the job will not run again.
 func (s State) Terminal() bool {
 	return s == StateSucceeded || s == StateFailed || s == StateCancelled
 }
@@ -52,6 +55,7 @@ func (s State) Terminal() bool {
 // (At-most-once is reserved for a future release when persistent stores can ack-before-run.)
 type Delivery uint8
 
+// Delivery modes.
 const (
 	DeliveryAtLeastOnce Delivery = iota
 )
@@ -61,24 +65,24 @@ type Handler func(ctx context.Context, payload []byte) error
 
 // Job is the canonical record passed between Store and Scheduler.
 type Job struct {
-	ID            JobID
-	Name          string
-	Queue         string
-	Priority      Priority
-	Payload       []byte
-	CodecName     string // empty when raw []byte
-	RunAt         time.Time
-	Attempt       int
-	MaxAttempts   int
-	State         State
-	Delivery      Delivery
-	Timeout       time.Duration // zero = no per-job timeout
-	LockedBy      string
-	LockedUntil   time.Time
-	LastError     string
-	RecurringID   JobID // empty for one-shot jobs; references RecurringSpec.ID
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID          JobID
+	Name        string
+	Queue       string
+	Priority    Priority
+	Payload     []byte
+	CodecName   string // empty when raw []byte
+	RunAt       time.Time
+	Attempt     int
+	MaxAttempts int
+	State       State
+	Delivery    Delivery
+	Timeout     time.Duration // zero = no per-job timeout
+	LockedBy    string
+	LockedUntil time.Time
+	LastError   string
+	RecurringID JobID // empty for one-shot jobs; references RecurringSpec.ID
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 
 	// Internal recurring flag carried via JobOption (not persisted by Stores).
 	catchup bool

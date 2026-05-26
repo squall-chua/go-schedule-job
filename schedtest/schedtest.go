@@ -24,16 +24,19 @@ type waiter struct {
 // NewFakeClock returns a FakeClock anchored at start.
 func NewFakeClock(start time.Time) *FakeClock { return &FakeClock{now: start} }
 
+// Now returns the clock's current frozen time.
 func (c *FakeClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.now
 }
 
+// Sleep blocks until the clock has been Advanced by at least d.
 func (c *FakeClock) Sleep(d time.Duration) {
 	<-c.After(d)
 }
 
+// After returns a channel that fires once the clock has been Advanced by at least d.
 func (c *FakeClock) After(d time.Duration) <-chan time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()

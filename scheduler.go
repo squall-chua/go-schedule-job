@@ -34,9 +34,16 @@ type Scheduler struct {
 // JobOption configures one dispatched job.
 type JobOption func(*Job)
 
-func WithQueue(name string) JobOption       { return func(j *Job) { j.Queue = name } }
-func WithPriority(p Priority) JobOption     { return func(j *Job) { j.Priority = p } }
-func WithMaxAttempts(n int) JobOption       { return func(j *Job) { j.MaxAttempts = n } }
+// WithQueue routes the job to the named queue. Defaults to "default".
+func WithQueue(name string) JobOption { return func(j *Job) { j.Queue = name } }
+
+// WithPriority sets the job's claim-time priority. Higher priorities are claimed first.
+func WithPriority(p Priority) JobOption { return func(j *Job) { j.Priority = p } }
+
+// WithMaxAttempts caps how many times the job will be tried before terminal failure. Defaults to 3.
+func WithMaxAttempts(n int) JobOption { return func(j *Job) { j.MaxAttempts = n } }
+
+// WithTimeout sets a per-attempt timeout for the handler context. Zero means no timeout.
 func WithTimeout(d time.Duration) JobOption { return func(j *Job) { j.Timeout = d } }
 
 // withCodec is used by typed dispatch helpers; not exported.
@@ -48,7 +55,10 @@ func WithCatchup(c bool) JobOption { return func(j *Job) { j.catchup = c } }
 // SchedulerOption configures the scheduler at construction.
 type SchedulerOption func(*Scheduler)
 
+// WithStore sets the persistence backend. Required when no default is supplied.
 func WithStore(s Store) SchedulerOption { return func(sc *Scheduler) { sc.store = s } }
+
+// WithQueues configures named queues and their worker concurrency.
 func WithQueues(m map[string]int) SchedulerOption {
 	return func(sc *Scheduler) {
 		sc.queues = map[string]int{}
@@ -57,22 +67,40 @@ func WithQueues(m map[string]int) SchedulerOption {
 		}
 	}
 }
+
+// WithWorkerID overrides the per-process worker identifier (default: random UUID).
 func WithWorkerID(id string) SchedulerOption { return func(sc *Scheduler) { sc.workerID = id } }
+
+// WithHeartbeatInterval sets how often the janitor heartbeats and runs stale-claim recovery.
 func WithHeartbeatInterval(d time.Duration) SchedulerOption {
 	return func(sc *Scheduler) { sc.heartbeatInterval = d }
 }
+
+// WithVisibilityTimeout sets how long a claimed job is hidden before another scheduler can recover it.
 func WithVisibilityTimeout(d time.Duration) SchedulerOption {
 	return func(sc *Scheduler) { sc.visibilityTimeout = d }
 }
+
+// WithShutdownGrace bounds how long Start blocks after ctx is cancelled while waiting for workers.
 func WithShutdownGrace(d time.Duration) SchedulerOption {
 	return func(sc *Scheduler) { sc.shutdownGrace = d }
 }
-func WithHooks(h Hooks) SchedulerOption         { return func(sc *Scheduler) { sc.hooks = h } }
+
+// WithHooks installs lifecycle hooks (OnEnqueue/OnStart/OnSuccess/OnFailure/OnRetry).
+func WithHooks(h Hooks) SchedulerOption { return func(sc *Scheduler) { sc.hooks = h } }
+
+// WithLogger sets the structured logger used for scheduler events.
 func WithLogger(l *slog.Logger) SchedulerOption { return func(sc *Scheduler) { sc.logger = l } }
-func WithClock(c Clock) SchedulerOption         { return func(sc *Scheduler) { sc.clock = c } }
+
+// WithClock overrides the time source — useful in tests with a fake clock.
+func WithClock(c Clock) SchedulerOption { return func(sc *Scheduler) { sc.clock = c } }
+
+// WithDefaultBackoff overrides the retry backoff strategy used when a handler returns an error.
 func WithDefaultBackoff(b BackoffStrategy) SchedulerOption {
 	return func(sc *Scheduler) { sc.defaultBackoff = b }
 }
+
+// WithPollInterval sets the dispatcher tick — the upper bound on dispatch latency between Save and run.
 func WithPollInterval(d time.Duration) SchedulerOption {
 	return func(sc *Scheduler) { sc.pollInterval = d }
 }
@@ -165,10 +193,12 @@ func (s *Scheduler) After(d time.Duration, name string, payload []byte, opts ...
 	return s.At(s.clock.Now().Add(d), name, payload, opts...)
 }
 
+// Cancel marks a pending job as cancelled. Returns ErrJobNotFound or ErrJobNotPending if not applicable.
 func (s *Scheduler) Cancel(id JobID) error {
 	return s.store.Cancel(context.Background(), id)
 }
 
+// Reschedule moves a pending job's RunAt to newTime. Returns ErrJobNotFound or ErrJobNotPending if not applicable.
 func (s *Scheduler) Reschedule(id JobID, newTime time.Time) error {
 	return s.store.Reschedule(context.Background(), id, newTime)
 }

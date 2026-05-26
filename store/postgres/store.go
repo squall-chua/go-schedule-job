@@ -90,8 +90,7 @@ ON CONFLICT (id) DO UPDATE SET
     updated_at=EXCLUDED.updated_at
 `
 
-// Save persists or upserts the job, then sends a NOTIFY on
-// "goschedule_<queue>" so listeners (see Listen) can wake immediately.
+// Save inserts or updates a job by ID.
 func (s *Store) Save(ctx context.Context, j gs.Job) error {
 	state := j.State
 	if state == 0 {
@@ -143,6 +142,7 @@ RETURNING jobs.id, jobs.queue, jobs.name, jobs.payload, jobs.codec_name,
           jobs.last_error, jobs.recurring_id, jobs.created_at, jobs.updated_at
 `
 
+// ClaimDue claims up to n due jobs from the named queue, ordered by priority then run_at.
 func (s *Store) ClaimDue(ctx context.Context, queue string, now time.Time, n int, workerID string, lockUntil time.Time) ([]gs.Job, error) {
 	rows, err := s.pool.Query(ctx, claimDueSQL,
 		queue, int(gs.StatePending), now, n,
@@ -193,6 +193,7 @@ func jobLess(a, b gs.Job) bool {
 
 const ackSQL = `DELETE FROM jobs WHERE id = $1 AND state = $2`
 
+// Ack marks a claimed job as successfully completed.
 func (s *Store) Ack(ctx context.Context, id gs.JobID) error {
 	tag, err := s.pool.Exec(ctx, ackSQL, string(id), int(gs.StateClaimed))
 	if err != nil {
@@ -218,12 +219,13 @@ UPDATE jobs SET
 WHERE id = $5 AND state = $6
 `
 
+// Fail records an attempt failure. The job is re-queued for retry at nextAttemptAt.
 func (s *Store) Fail(ctx context.Context, id gs.JobID, errMsg string, nextAttemptAt time.Time) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("postgres fail begin: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	var attempt, maxAttempts int32
 	row := tx.QueryRow(ctx, failSelectSQL, string(id), int(gs.StateClaimed))
@@ -255,12 +257,13 @@ func (s *Store) Fail(ctx context.Context, id gs.JobID, errMsg string, nextAttemp
 const cancelSelectSQL = `SELECT state FROM jobs WHERE id = $1`
 const cancelDeleteSQL = `DELETE FROM jobs WHERE id = $1`
 
+// Cancel marks a pending job as cancelled. Returns gs.ErrJobNotFound or gs.ErrJobNotPending if not applicable.
 func (s *Store) Cancel(ctx context.Context, id gs.JobID) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("postgres cancel begin: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	var state int16
 	row := tx.QueryRow(ctx, cancelSelectSQL, string(id))
 	if err := row.Scan(&state); err != nil {
@@ -284,12 +287,13 @@ func (s *Store) Cancel(ctx context.Context, id gs.JobID) error {
 const rescheduleSelectSQL = `SELECT state FROM jobs WHERE id = $1`
 const rescheduleUpdateSQL = `UPDATE jobs SET run_at = $1, updated_at = $2 WHERE id = $3`
 
+// Reschedule changes a pending job's run_at. Returns gs.ErrJobNotFound or gs.ErrJobNotPending if not applicable.
 func (s *Store) Reschedule(ctx context.Context, id gs.JobID, newTime time.Time) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("postgres reschedule begin: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	var state int16
 	row := tx.QueryRow(ctx, rescheduleSelectSQL, string(id))
 	if err := row.Scan(&state); err != nil {
@@ -315,6 +319,7 @@ INSERT INTO workers (worker_id, last_heartbeat) VALUES ($1, $2)
 ON CONFLICT (worker_id) DO UPDATE SET last_heartbeat = EXCLUDED.last_heartbeat
 `
 
+// Heartbeat records a liveness ping for the given worker.
 func (s *Store) Heartbeat(ctx context.Context, workerID string, now time.Time) error {
 	if _, err := s.pool.Exec(ctx, heartbeatSQL, workerID, now); err != nil {
 		return fmt.Errorf("postgres heartbeat: %w", err)
@@ -322,11 +327,6 @@ func (s *Store) Heartbeat(ctx context.Context, workerID string, now time.Time) e
 	return nil
 }
 
-// RecoverStale compares locked_until against the database's own now() rather
-// than the caller-supplied time, so multiple schedulers with skewed clocks
-// agree on which claims have expired. The `now time.Time` parameter is kept
-// on the interface for in-memory implementations and is used here only for
-// the observability column `updated_at`.
 const recoverStaleSQL = `
 UPDATE jobs
 SET state = $1, locked_by = '', locked_until = '0001-01-01 00:00:00+00', updated_at = $2
@@ -335,6 +335,7 @@ WHERE state = $3
   AND locked_until < now()
 `
 
+// RecoverStale re-queues jobs whose claims have expired and returns the count recovered.
 func (s *Store) RecoverStale(ctx context.Context, now time.Time) (int, error) {
 	tag, err := s.pool.Exec(ctx, recoverStaleSQL,
 		int(gs.StatePending), now, int(gs.StateClaimed),
@@ -347,6 +348,7 @@ func (s *Store) RecoverStale(ctx context.Context, now time.Time) (int, error) {
 
 const queueSizeSQL = `SELECT COUNT(*) FROM jobs WHERE queue = $1 AND state = $2`
 
+// QueueSize returns the count of pending jobs in the named queue.
 func (s *Store) QueueSize(ctx context.Context, queue string) (int, error) {
 	var n int
 	row := s.pool.QueryRow(ctx, queueSizeSQL, queue, int(gs.StatePending))
@@ -388,6 +390,7 @@ const updateRecurringNextRunSQL = `
 UPDATE recurring SET next_run_at = $1, last_fire_at = $2 WHERE id = $3
 `
 
+// UpsertRecurring inserts or replaces a recurring schedule.
 func (s *Store) UpsertRecurring(ctx context.Context, spec gs.RecurringSpec) error {
 	if _, err := s.pool.Exec(ctx, upsertRecurringSQL,
 		string(spec.ID), spec.Name, spec.Queue, spec.Payload, spec.CodecName,
@@ -401,6 +404,7 @@ func (s *Store) UpsertRecurring(ctx context.Context, spec gs.RecurringSpec) erro
 	return nil
 }
 
+// ListRecurring returns all recurring schedules.
 func (s *Store) ListRecurring(ctx context.Context) ([]gs.RecurringSpec, error) {
 	rows, err := s.pool.Query(ctx, listRecurringSQL)
 	if err != nil {
@@ -433,6 +437,7 @@ func (s *Store) ListRecurring(ctx context.Context) ([]gs.RecurringSpec, error) {
 	return out, rows.Err()
 }
 
+// DeleteRecurring removes a recurring schedule by ID.
 func (s *Store) DeleteRecurring(ctx context.Context, id gs.JobID) error {
 	if _, err := s.pool.Exec(ctx, deleteRecurringSQL, string(id)); err != nil {
 		return fmt.Errorf("postgres delete recurring: %w", err)
@@ -440,6 +445,7 @@ func (s *Store) DeleteRecurring(ctx context.Context, id gs.JobID) error {
 	return nil
 }
 
+// UpdateRecurringNextRun records the next firing time and last fire time on a recurring schedule.
 func (s *Store) UpdateRecurringNextRun(ctx context.Context, id gs.JobID, nextRunAt, lastFireAt time.Time) error {
 	if _, err := s.pool.Exec(ctx, updateRecurringNextRunSQL, nextRunAt, lastFireAt, string(id)); err != nil {
 		return fmt.Errorf("postgres update recurring next: %w", err)
@@ -447,9 +453,6 @@ func (s *Store) UpdateRecurringNextRun(ctx context.Context, id gs.JobID, nextRun
 	return nil
 }
 
-// Expiry uses now() (DB-side) so concurrent schedulers with skewed wall
-// clocks agree on whether a lease is still valid. The `leased_by = $4`
-// disjunct lets the same worker extend a lease it already holds.
 const acquireLeaseSQL = `
 UPDATE recurring SET lease_until = $1, leased_by = $2
 WHERE id = $3
@@ -458,6 +461,7 @@ WHERE id = $3
 
 const leaseSpecExistsSQL = `SELECT 1 FROM recurring WHERE id = $1`
 
+// AcquireRecurringLease attempts to claim exclusive responsibility for firing the recurring schedule until leaseUntil. Returns true if the caller holds the lease.
 func (s *Store) AcquireRecurringLease(ctx context.Context, specID gs.JobID, leaseUntil time.Time, workerID string) (bool, error) {
 	tag, err := s.pool.Exec(ctx, acquireLeaseSQL,
 		leaseUntil, workerID, string(specID), workerID,

@@ -38,9 +38,9 @@ func TestRegisterTyped_RoundTrips(t *testing.T) {
 
 type errCodec struct{}
 
-func (errCodec) Name() string                    { return "err" }
-func (errCodec) Encode(_ any) ([]byte, error)    { return nil, errors.New("encode boom") }
-func (errCodec) Decode(_ []byte, _ any) error    { return nil }
+func (errCodec) Name() string                 { return "err" }
+func (errCodec) Encode(_ any) ([]byte, error) { return nil, errors.New("encode boom") }
+func (errCodec) Decode(_ []byte, _ any) error { return nil }
 
 func TestNowTyped_EncodeErrorPropagates(t *testing.T) {
 	s, _ := gs.NewScheduler(gs.WithStore(memstore.New()))

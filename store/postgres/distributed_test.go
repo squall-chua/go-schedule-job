@@ -103,8 +103,14 @@ func TestPostgresStore_ContestedRecurringLeaseExclusivity(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(2)
 		var okA, okB bool
-		go func() { defer wg.Done(); okA, _ = a.AcquireRecurringLease(ctx, "r1", time.Now().Add(time.Minute), "wa") }()
-		go func() { defer wg.Done(); okB, _ = b.AcquireRecurringLease(ctx, "r1", time.Now().Add(time.Minute), "wb") }()
+		go func() {
+			defer wg.Done()
+			okA, _ = a.AcquireRecurringLease(ctx, "r1", time.Now().Add(time.Minute), "wa")
+		}()
+		go func() {
+			defer wg.Done()
+			okB, _ = b.AcquireRecurringLease(ctx, "r1", time.Now().Add(time.Minute), "wb")
+		}()
 		wg.Wait()
 		if okA == okB {
 			t.Fatalf("race %d: exactly one acquire must succeed, got a=%v b=%v", r, okA, okB)

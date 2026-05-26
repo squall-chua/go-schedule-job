@@ -6,13 +6,16 @@ import "github.com/redis/go-redis/v9"
 // atomically moves jobs from pending into the claimed ZSET.
 //
 // KEYS:  the pending ZSETs in priority order (highest first), then the
-//        claimed ZSET as the final KEY.
+//
+//	claimed ZSET as the final KEY.
+//
 // ARGV:  [1] now (unix nanos)
-//        [2] n (max jobs to claim)
-//        [3] workerID
-//        [4] lockUntil (unix nanos)
-//        [5] jobKeyPrefix (e.g. "{goschedule}:job:")
-//        [6] stateClaimed (e.g. "1")
+//
+//	[2] n (max jobs to claim)
+//	[3] workerID
+//	[4] lockUntil (unix nanos)
+//	[5] jobKeyPrefix (e.g. "{goschedule}:job:")
+//	[6] stateClaimed (e.g. "1")
 //
 // Returns: list of jobIDs that were claimed (in priority-DESC, run_at-ASC
 // order across buckets).
@@ -50,7 +53,8 @@ return result
 //
 // KEYS: [1] job hash, [2] claimed ZSET, [3] pending ZSET (the right bucket)
 // ARGV: [1] jobID, [2] errMsg, [3] nextAttemptAt (unix nanos),
-//       [4] now (unix nanos), [5] statePending, [6] stateClaimed
+//
+//	[4] now (unix nanos), [5] statePending, [6] stateClaimed
 //
 // Returns: "ok" | "missing" (missing covers both not-found and not-claimed)
 var failScript = redis.NewScript(`
@@ -144,7 +148,8 @@ return 'ok'
 //
 // KEYS:  [1] claimed ZSET
 // ARGV:  [1] jobKeyPrefix, [2] pendingKeyPrefix (e.g. "{goschedule}:pending:"),
-//        [3] statePending
+//
+//	[3] statePending
 //
 // Returns: integer count of jobs recovered
 var recoverStaleScript = redis.NewScript(`
