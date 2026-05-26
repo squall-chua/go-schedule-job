@@ -2,6 +2,7 @@ package prometheus
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -125,5 +126,20 @@ func TestHooks_OnSuccess(t *testing.T) {
 	// Histogram sample count via CollectAndCount.
 	if n := testutil.CollectAndCount(c.metrics.duration); n != 1 {
 		t.Fatalf("duration vec series = %d, want 1", n)
+	}
+}
+
+func TestHooks_OnFailure(t *testing.T) {
+	c := New(&fakeStore{}, nil)
+	h := c.Hooks()
+	c.metrics.inFlight.WithLabelValues("default").Set(2)
+
+	h.OnFailure("id-1", "send-email", "default", 3, errors.New("boom"))
+
+	if got := testutil.ToFloat64(c.metrics.failed.WithLabelValues("default", "send-email")); got != 1 {
+		t.Fatalf("failed = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(c.metrics.inFlight.WithLabelValues("default")); got != 1 {
+		t.Fatalf("in_flight = %v, want 1", got)
 	}
 }
