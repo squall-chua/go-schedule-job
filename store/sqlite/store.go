@@ -432,6 +432,8 @@ UPDATE recurring SET lease_until = ?, leased_by = ?
 WHERE id = ? AND (lease_until = 0 OR lease_until < ? OR leased_by = ?)
 `
 
+const leaseSpecExistsSQL = `SELECT COUNT(*) FROM recurring WHERE id = ?`
+
 func (s *Store) AcquireRecurringLease(ctx context.Context, specID gs.JobID, leaseUntil time.Time, workerID string) (bool, error) {
 	now := time.Now()
 	res, err := s.db.ExecContext(ctx, acquireLeaseSQL,
@@ -445,8 +447,24 @@ func (s *Store) AcquireRecurringLease(ctx context.Context, specID gs.JobID, leas
 	if err != nil {
 		return false, fmt.Errorf("sqlite acquire lease rows: %w", err)
 	}
-	return rows > 0, nil
+	if rows > 0 {
+		return true, nil
+	}
+	// rows == 0: either the spec doesn't exist or another worker holds the lease.
+	// Distinguish by checking existence.
+	var count int
+	if err := s.db.QueryRowContext(ctx, leaseSpecExistsSQL, string(specID)).Scan(&count); err != nil {
+		return false, fmt.Errorf("sqlite acquire lease exists: %w", err)
+	}
+	if count == 0 {
+		// Spec doesn't exist yet — treat as acquirable (consistent with no-op stores).
+		return true, nil
+	}
+	return false, nil
 }
+
+// Compile-time check that *Store satisfies gs.Store.
+var _ gs.Store = (*Store)(nil)
 
 // scanJob reads a row matching the SELECT projection used by ClaimDue.
 func scanJob(rows *sql.Rows) (gs.Job, error) {

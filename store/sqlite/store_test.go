@@ -8,6 +8,7 @@ import (
 
 	gs "github.com/squall-chua/go-schedule-job"
 	"github.com/squall-chua/go-schedule-job/store/sqlite"
+	"github.com/squall-chua/go-schedule-job/storetest"
 )
 
 func openTempStore(t *testing.T) *sqlite.Store {
@@ -383,5 +384,45 @@ func TestSQLiteStore_AcquireRecurringLease(t *testing.T) {
 	ok3, err := s.AcquireRecurringLease(ctx, "r2", now.Add(time.Minute), "w3")
 	if err != nil || !ok3 {
 		t.Fatalf("expired lease should be acquirable: ok=%v err=%v", ok3, err)
+	}
+}
+
+func TestSQLiteStore_Conformance(t *testing.T) {
+	storetest.Run(t, func(t *testing.T) (gs.Store, func()) {
+		s := openTempStore(t)
+		return s, func() {} // openTempStore already registers Close via t.Cleanup
+	})
+}
+
+func TestSQLiteStore_SurvivesReopen(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "test.db")
+	s, err := sqlite.New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if err := s.Save(ctx, gs.Job{
+		ID: "persist", Queue: "default", Name: "n",
+		RunAt: now, State: gs.StatePending, MaxAttempts: 3, CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := sqlite.New(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+
+	got, err := s2.ClaimDue(ctx, "default", now, 10, "w", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "persist" {
+		t.Fatalf("persisted job not visible after reopen: %+v", got)
 	}
 }
