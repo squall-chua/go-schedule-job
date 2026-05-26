@@ -479,6 +479,9 @@ func (s *Store) AcquireRecurringLease(ctx context.Context, specID gs.JobID, leas
 	return false, nil
 }
 
+// Compile-time check that *Store satisfies gs.Store.
+var _ gs.Store = (*Store)(nil)
+
 // scanJob reads a single row from ClaimDue's RETURNING projection. Accepts
 // pgx.Rows so it can be shared with future single-row helpers via pgx.Row.
 func scanJob(rows pgx.Rows) (gs.Job, error) {

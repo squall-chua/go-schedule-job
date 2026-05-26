@@ -13,6 +13,7 @@ import (
 
 	gs "github.com/squall-chua/go-schedule-job"
 	"github.com/squall-chua/go-schedule-job/store/postgres"
+	"github.com/squall-chua/go-schedule-job/storetest"
 )
 
 var (
@@ -432,6 +433,13 @@ func TestPostgresStore_AcquireRecurringLeaseMissingSpec(t *testing.T) {
 	if !ok {
 		t.Error("missing spec: expected (true, nil) to match conformance suite")
 	}
+}
+
+func TestPostgresStore_Conformance(t *testing.T) {
+	storetest.Run(t, func(t *testing.T) (gs.Store, func()) {
+		s := openTestStore(t)
+		return s, func() {} // openTestStore registers cleanup via t.Cleanup
+	})
 }
 
 func TestPostgresStore_ListenNotifiesOnSave(t *testing.T) {
