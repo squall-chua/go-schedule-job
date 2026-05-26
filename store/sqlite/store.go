@@ -292,6 +292,162 @@ func (s *Store) Reschedule(ctx context.Context, id gs.JobID, newTime time.Time) 
 	return nil
 }
 
+// --- Heartbeat / RecoverStale / QueueSize ---
+
+func (s *Store) Heartbeat(_ context.Context, _ string, _ time.Time) error {
+	return nil
+}
+
+const recoverStaleSQL = `
+UPDATE jobs SET state = ?, locked_by = '', locked_until = 0, updated_at = ?
+WHERE state = ? AND locked_until > 0 AND locked_until < ?
+`
+
+func (s *Store) RecoverStale(ctx context.Context, now time.Time) (int, error) {
+	res, err := s.db.ExecContext(ctx, recoverStaleSQL,
+		int(gs.StatePending), toUnixNano(now), int(gs.StateClaimed), toUnixNano(now),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("sqlite recover stale: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("sqlite recover stale rows: %w", err)
+	}
+	return int(rows), nil
+}
+
+const queueSizeSQL = `SELECT COUNT(*) FROM jobs WHERE queue = ? AND state = ?`
+
+func (s *Store) QueueSize(ctx context.Context, queue string) (int, error) {
+	var n int
+	row := s.db.QueryRowContext(ctx, queueSizeSQL, queue, int(gs.StatePending))
+	if err := row.Scan(&n); err != nil {
+		return 0, fmt.Errorf("sqlite queue size: %w", err)
+	}
+	return n, nil
+}
+
+// --- Recurring CRUD ---
+
+const upsertRecurringSQL = `
+INSERT INTO recurring (
+    id, name, queue, payload, codec_name, priority, timeout_ns, max_attempts,
+    cron, every_ns, catchup, next_run_at, last_fire_at, lease_until, leased_by
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    name=excluded.name,
+    queue=excluded.queue,
+    payload=excluded.payload,
+    codec_name=excluded.codec_name,
+    priority=excluded.priority,
+    timeout_ns=excluded.timeout_ns,
+    max_attempts=excluded.max_attempts,
+    cron=excluded.cron,
+    every_ns=excluded.every_ns,
+    catchup=excluded.catchup,
+    next_run_at=excluded.next_run_at,
+    last_fire_at=excluded.last_fire_at
+`
+
+const listRecurringSQL = `
+SELECT id, name, queue, payload, codec_name, priority, timeout_ns, max_attempts,
+       cron, every_ns, catchup, next_run_at, last_fire_at, lease_until, leased_by
+FROM recurring
+`
+
+const deleteRecurringSQL = `DELETE FROM recurring WHERE id = ?`
+
+const updateRecurringNextRunSQL = `
+UPDATE recurring SET next_run_at = ?, last_fire_at = ? WHERE id = ?
+`
+
+func (s *Store) UpsertRecurring(ctx context.Context, spec gs.RecurringSpec) error {
+	catch := 0
+	if spec.Catchup {
+		catch = 1
+	}
+	_, err := s.db.ExecContext(ctx, upsertRecurringSQL,
+		string(spec.ID), spec.Name, spec.Queue, spec.Payload, spec.CodecName,
+		int(spec.Priority), int64(spec.Timeout), spec.MaxAttempts,
+		spec.Cron, int64(spec.Every), catch,
+		toUnixNano(spec.NextRunAt), toUnixNano(spec.LastFireAt),
+		toUnixNano(spec.LeaseUntil), spec.LeasedBy,
+	)
+	if err != nil {
+		return fmt.Errorf("sqlite upsert recurring: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListRecurring(ctx context.Context) ([]gs.RecurringSpec, error) {
+	rows, err := s.db.QueryContext(ctx, listRecurringSQL)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite list recurring: %w", err)
+	}
+	defer rows.Close()
+	var out []gs.RecurringSpec
+	for rows.Next() {
+		var id, name, queue, codec, cron, leasedBy string
+		var payload []byte
+		var priority, maxAttempts, catch int
+		var timeoutNs, everyNs, nextRunAt, lastFireAt, leaseUntil int64
+		if err := rows.Scan(
+			&id, &name, &queue, &payload, &codec, &priority, &timeoutNs, &maxAttempts,
+			&cron, &everyNs, &catch, &nextRunAt, &lastFireAt, &leaseUntil, &leasedBy,
+		); err != nil {
+			return nil, fmt.Errorf("sqlite list recurring scan: %w", err)
+		}
+		out = append(out, gs.RecurringSpec{
+			ID: gs.JobID(id), Name: name, Queue: queue, Payload: payload, CodecName: codec,
+			Priority: gs.Priority(priority), Timeout: time.Duration(timeoutNs), MaxAttempts: maxAttempts,
+			Cron: cron, Every: time.Duration(everyNs), Catchup: catch != 0,
+			NextRunAt: fromUnixNano(nextRunAt), LastFireAt: fromUnixNano(lastFireAt),
+			LeaseUntil: fromUnixNano(leaseUntil), LeasedBy: leasedBy,
+		})
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DeleteRecurring(ctx context.Context, id gs.JobID) error {
+	if _, err := s.db.ExecContext(ctx, deleteRecurringSQL, string(id)); err != nil {
+		return fmt.Errorf("sqlite delete recurring: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) UpdateRecurringNextRun(ctx context.Context, id gs.JobID, nextRunAt, lastFireAt time.Time) error {
+	if _, err := s.db.ExecContext(ctx, updateRecurringNextRunSQL,
+		toUnixNano(nextRunAt), toUnixNano(lastFireAt), string(id),
+	); err != nil {
+		return fmt.Errorf("sqlite update recurring next: %w", err)
+	}
+	return nil
+}
+
+// --- AcquireRecurringLease ---
+
+const acquireLeaseSQL = `
+UPDATE recurring SET lease_until = ?, leased_by = ?
+WHERE id = ? AND (lease_until = 0 OR lease_until < ? OR leased_by = ?)
+`
+
+func (s *Store) AcquireRecurringLease(ctx context.Context, specID gs.JobID, leaseUntil time.Time, workerID string) (bool, error) {
+	now := time.Now()
+	res, err := s.db.ExecContext(ctx, acquireLeaseSQL,
+		toUnixNano(leaseUntil), workerID,
+		string(specID), toUnixNano(now), workerID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("sqlite acquire lease: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("sqlite acquire lease rows: %w", err)
+	}
+	return rows > 0, nil
+}
+
 // scanJob reads a row matching the SELECT projection used by ClaimDue.
 func scanJob(rows *sql.Rows) (gs.Job, error) {
 	var j gs.Job
