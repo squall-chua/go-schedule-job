@@ -200,3 +200,30 @@ func (s *Store) Ack(ctx context.Context, id gs.JobID) error {
 	}
 	return nil
 }
+
+func (s *Store) Fail(ctx context.Context, id gs.JobID, errMsg string, nextAttemptAt time.Time) error {
+	// Look up queue + priority so we can target the right pending ZSET.
+	fields, err := s.rdb.HMGet(ctx, jobKey(id), "queue", "priority").Result()
+	if err != nil {
+		return fmt.Errorf("redis fail lookup: %w", err)
+	}
+	if fields[0] == nil {
+		return gs.ErrJobNotFound
+	}
+	queue, _ := fields[0].(string)
+	priorityStr, _ := fields[1].(string)
+	priority := gs.Priority(asInt(priorityStr))
+
+	res, err := failScript.Run(ctx, s.rdb,
+		[]string{jobKey(id), claimedKey, pendingKey(queue, priority)},
+		string(id), errMsg, formatTime(nextAttemptAt), formatTime(time.Now()),
+		strconv.Itoa(int(gs.StatePending)), strconv.Itoa(int(gs.StateClaimed)),
+	).Result()
+	if err != nil {
+		return fmt.Errorf("redis fail: %w", err)
+	}
+	if res != "ok" {
+		return gs.ErrJobNotFound
+	}
+	return nil
+}

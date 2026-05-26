@@ -121,3 +121,51 @@ func TestRedisStore_AckPending(t *testing.T) {
 		t.Errorf("want ErrJobNotFound for pending Ack, got %v", err)
 	}
 }
+
+func TestRedisStore_FailRetries(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	_ = s.Save(ctx, gs.Job{ID: "j", Queue: "default", Name: "n", RunAt: now, State: gs.StatePending, MaxAttempts: 3, CreatedAt: now})
+	_, _ = s.ClaimDue(ctx, "default", now, 1, "w", now.Add(time.Minute))
+
+	next := now.Add(2 * time.Second)
+	if err := s.Fail(ctx, "j", "boom", next); err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+	got, _ := s.ClaimDue(ctx, "default", next.Add(time.Millisecond), 1, "w", next.Add(time.Minute))
+	if len(got) != 1 || got[0].Attempt != 1 || got[0].LastError != "boom" {
+		t.Fatalf("retry not visible: %+v", got)
+	}
+}
+
+func TestRedisStore_FailExhausts(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	_ = s.Save(ctx, gs.Job{ID: "j", Queue: "default", Name: "n", RunAt: now, State: gs.StatePending, MaxAttempts: 1, CreatedAt: now})
+	_, _ = s.ClaimDue(ctx, "default", now, 1, "w", now.Add(time.Minute))
+	if err := s.Fail(ctx, "j", "boom", now.Add(time.Second)); err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+	got, _ := s.ClaimDue(ctx, "default", now.Add(time.Hour), 10, "w", now.Add(time.Hour).Add(time.Minute))
+	if len(got) != 0 {
+		t.Errorf("exhausted job reappeared: %+v", got)
+	}
+}
+
+func TestRedisStore_FailMissing(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.Fail(t.Context(), "missing", "x", time.Now()); err != gs.ErrJobNotFound {
+		t.Errorf("want ErrJobNotFound, got %v", err)
+	}
+}
+
+func TestRedisStore_FailPending(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	_ = s.Save(ctx, gs.Job{ID: "j", Queue: "default", Name: "n", RunAt: time.Now(), State: gs.StatePending})
+	if err := s.Fail(ctx, "j", "x", time.Now()); err != gs.ErrJobNotFound {
+		t.Errorf("want ErrJobNotFound for pending Fail, got %v", err)
+	}
+}
