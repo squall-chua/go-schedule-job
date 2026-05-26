@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 
@@ -125,4 +126,49 @@ func (s *Store) Save(ctx context.Context, j gs.Job) error {
 func asInt(s string) int {
 	n, _ := strconv.Atoi(s)
 	return n
+}
+
+// priorityBuckets returns the pending ZSET keys for the given queue in
+// priority-DESC order (Critical first, Low last).
+func priorityBuckets(queue string) []string {
+	return []string{
+		pendingKey(queue, gs.PriorityCritical),
+		pendingKey(queue, gs.PriorityHigh),
+		pendingKey(queue, gs.PriorityNormal),
+		pendingKey(queue, gs.PriorityLow),
+	}
+}
+
+func (s *Store) ClaimDue(ctx context.Context, queue string, now time.Time, n int, workerID string, lockUntil time.Time) ([]gs.Job, error) {
+	buckets := priorityBuckets(queue)
+	keys := append(buckets, claimedKey)
+
+	res, err := claimDueScript.Run(ctx, s.rdb, keys,
+		formatTime(now), n, workerID, formatTime(lockUntil), keyPrefix+"job:", strconv.Itoa(int(gs.StateClaimed)),
+	).Result()
+	if err != nil {
+		return nil, fmt.Errorf("redis claim: %w", err)
+	}
+	idsAny, ok := res.([]any)
+	if !ok {
+		return nil, fmt.Errorf("redis claim: unexpected script result type %T", res)
+	}
+	if len(idsAny) == 0 {
+		return nil, nil
+	}
+
+	// Pipelined HGETALL for each claimed ID.
+	pipe := s.rdb.Pipeline()
+	gets := make([]*redis.MapStringStringCmd, len(idsAny))
+	for i, id := range idsAny {
+		gets[i] = pipe.HGetAll(ctx, jobKey(gs.JobID(id.(string))))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, fmt.Errorf("redis claim hgetall: %w", err)
+	}
+	out := make([]gs.Job, len(gets))
+	for i, g := range gets {
+		out[i] = deserializeJob(g.Val())
+	}
+	return out, nil
 }

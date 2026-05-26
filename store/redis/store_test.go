@@ -41,3 +41,51 @@ func TestRedisStore_SaveInsertsAndUpserts(t *testing.T) {
 		t.Fatalf("Save (upsert): %v", err)
 	}
 }
+
+func TestRedisStore_ClaimDueRespectsPriority(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	mkj := func(id string, p gs.Priority, runAt time.Time) gs.Job {
+		return gs.Job{ID: gs.JobID(id), Queue: "default", Name: "n", Priority: p, RunAt: runAt, State: gs.StatePending, MaxAttempts: 3, CreatedAt: now}
+	}
+	if err := s.Save(ctx, mkj("low", gs.PriorityLow, now.Add(-2*time.Second))); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(ctx, mkj("crit", gs.PriorityCritical, now.Add(-1*time.Second))); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.ClaimDue(ctx, "default", now, 10, "w1", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 jobs, got %d", len(got))
+	}
+	if got[0].ID != "crit" || got[1].ID != "low" {
+		t.Errorf("priority order wrong: %+v", []gs.JobID{got[0].ID, got[1].ID})
+	}
+	for _, j := range got {
+		if j.State != gs.StateClaimed || j.LockedBy != "w1" {
+			t.Errorf("job %s not marked claimed: %+v", j.ID, j)
+		}
+	}
+}
+
+func TestRedisStore_ClaimDueSkipsFutureJobs(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if err := s.Save(ctx, gs.Job{
+		ID: "later", Queue: "default", Name: "n",
+		RunAt: now.Add(time.Hour), State: gs.StatePending,
+		MaxAttempts: 3, CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ClaimDue(ctx, "default", now, 10, "w", now.Add(time.Minute))
+	if len(got) != 0 {
+		t.Errorf("future job claimed: %+v", got)
+	}
+}
