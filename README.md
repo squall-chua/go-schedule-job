@@ -333,7 +333,3 @@ cmd/example/                     # Runnable example
 ```
 
 Each backend is its own Go module so you only pull in what you import.
-
-## Status
-
-Pre-alpha. All five modules in place and tested; APIs may still shift. See `docs/superpowers/specs/` for the full design and `docs/superpowers/plans/` for the implementation plans.
