@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/squallchua/goschedule/schedtest"
+	"github.com/squall-chua/go-schedule-job/schedtest"
 )
 
 func TestFakeClock_AdvanceUnblocksAfter(t *testing.T) {

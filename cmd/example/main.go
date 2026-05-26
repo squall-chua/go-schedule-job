@@ -9,8 +9,8 @@ import (
 	"os/signal"
 	"time"
 
-	gs "github.com/squallchua/goschedule"
-	"github.com/squallchua/goschedule/memstore"
+	gs "github.com/squall-chua/go-schedule-job"
+	"github.com/squall-chua/go-schedule-job/memstore"
 )
 
 func main() {

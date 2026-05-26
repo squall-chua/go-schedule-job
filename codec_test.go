@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	gs "github.com/squallchua/goschedule"
-	"github.com/squallchua/goschedule/memstore"
+	gs "github.com/squall-chua/go-schedule-job"
+	"github.com/squall-chua/go-schedule-job/memstore"
 )
 
 type stubCodec struct{}

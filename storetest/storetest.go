@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	gs "github.com/squallchua/goschedule"
+	gs "github.com/squall-chua/go-schedule-job"
 )
 
 // Factory returns a fresh, empty Store for one subtest, plus a teardown callback.

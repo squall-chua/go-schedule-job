@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	gs "github.com/squallchua/goschedule"
+	gs "github.com/squall-chua/go-schedule-job"
 )
 
 // Store is an in-memory implementation of goschedule.Store. Single-process; not durable.

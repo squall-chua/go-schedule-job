@@ -1,4 +1,4 @@
-module github.com/squallchua/goschedule
+module github.com/squall-chua/go-schedule-job
 
 go 1.25.1
 

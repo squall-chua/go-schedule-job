@@ -3,9 +3,9 @@ package storetest_test
 import (
 	"testing"
 
-	gs "github.com/squallchua/goschedule"
-	"github.com/squallchua/goschedule/memstore"
-	"github.com/squallchua/goschedule/storetest"
+	gs "github.com/squall-chua/go-schedule-job"
+	"github.com/squall-chua/go-schedule-job/memstore"
+	"github.com/squall-chua/go-schedule-job/storetest"
 )
 
 func TestMemStore_Conformance(t *testing.T) {

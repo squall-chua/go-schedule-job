@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	gs "github.com/squallchua/goschedule"
-	gsjson "github.com/squallchua/goschedule/codec/json"
-	"github.com/squallchua/goschedule/memstore"
+	gs "github.com/squall-chua/go-schedule-job"
+	gsjson "github.com/squall-chua/go-schedule-job/codec/json"
+	"github.com/squall-chua/go-schedule-job/memstore"
 )
 
 type Greeting struct {

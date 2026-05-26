@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	gs "github.com/squallchua/goschedule"
+	gs "github.com/squall-chua/go-schedule-job"
 )
 
 // FakeClock is a deterministic Clock used in tests.

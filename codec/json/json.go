@@ -4,7 +4,7 @@ package json
 import (
 	"encoding/json"
 
-	gs "github.com/squallchua/goschedule"
+	gs "github.com/squall-chua/go-schedule-job"
 )
 
 // Codec is a goschedule.Codec backed by encoding/json.
