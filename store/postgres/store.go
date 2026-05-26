@@ -310,6 +310,52 @@ func (s *Store) Reschedule(ctx context.Context, id gs.JobID, newTime time.Time) 
 	return nil
 }
 
+const heartbeatSQL = `
+INSERT INTO workers (worker_id, last_heartbeat) VALUES ($1, $2)
+ON CONFLICT (worker_id) DO UPDATE SET last_heartbeat = EXCLUDED.last_heartbeat
+`
+
+func (s *Store) Heartbeat(ctx context.Context, workerID string, now time.Time) error {
+	if _, err := s.pool.Exec(ctx, heartbeatSQL, workerID, now); err != nil {
+		return fmt.Errorf("postgres heartbeat: %w", err)
+	}
+	return nil
+}
+
+// RecoverStale compares locked_until against the database's own now() rather
+// than the caller-supplied time, so multiple schedulers with skewed clocks
+// agree on which claims have expired. The `now time.Time` parameter is kept
+// on the interface for in-memory implementations and is used here only for
+// the observability column `updated_at`.
+const recoverStaleSQL = `
+UPDATE jobs
+SET state = $1, locked_by = '', locked_until = '0001-01-01 00:00:00+00', updated_at = $2
+WHERE state = $3
+  AND locked_until > '0001-01-01 00:00:00+00'
+  AND locked_until < now()
+`
+
+func (s *Store) RecoverStale(ctx context.Context, now time.Time) (int, error) {
+	tag, err := s.pool.Exec(ctx, recoverStaleSQL,
+		int(gs.StatePending), now, int(gs.StateClaimed),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("postgres recover stale: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+const queueSizeSQL = `SELECT COUNT(*) FROM jobs WHERE queue = $1 AND state = $2`
+
+func (s *Store) QueueSize(ctx context.Context, queue string) (int, error) {
+	var n int
+	row := s.pool.QueryRow(ctx, queueSizeSQL, queue, int(gs.StatePending))
+	if err := row.Scan(&n); err != nil {
+		return 0, fmt.Errorf("postgres queue size: %w", err)
+	}
+	return n, nil
+}
+
 // scanJob reads a single row from ClaimDue's RETURNING projection. Accepts
 // pgx.Rows so it can be shared with future single-row helpers via pgx.Row.
 func scanJob(rows pgx.Rows) (gs.Job, error) {

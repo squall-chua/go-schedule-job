@@ -294,3 +294,52 @@ func TestPostgresStore_RescheduleMissing(t *testing.T) {
 		t.Errorf("want ErrJobNotFound, got %v", err)
 	}
 }
+
+func TestPostgresStore_HeartbeatRecordsRow(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if err := s.Heartbeat(ctx, "w1", now); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	// Second call should not error (UPSERT path).
+	if err := s.Heartbeat(ctx, "w1", now.Add(time.Second)); err != nil {
+		t.Fatalf("Heartbeat (upsert): %v", err)
+	}
+}
+
+func TestPostgresStore_RecoverStale(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	_ = s.Save(ctx, gs.Job{ID: "j", Queue: "default", Name: "n", RunAt: now, State: gs.StatePending, MaxAttempts: 3})
+	// Claim with a lockUntil already in the past.
+	_, _ = s.ClaimDue(ctx, "default", now, 1, "w", now.Add(-time.Minute))
+
+	recovered, err := s.RecoverStale(ctx, now)
+	if err != nil {
+		t.Fatalf("RecoverStale: %v", err)
+	}
+	if recovered != 1 {
+		t.Errorf("want 1 recovered, got %d", recovered)
+	}
+	got, _ := s.ClaimDue(ctx, "default", now, 1, "w2", now.Add(time.Minute))
+	if len(got) != 1 {
+		t.Errorf("recovered job not re-claimable: %+v", got)
+	}
+}
+
+func TestPostgresStore_QueueSize(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	now := time.Now()
+	_ = s.Save(ctx, gs.Job{ID: "a", Queue: "default", Name: "n", RunAt: now, State: gs.StatePending})
+	_ = s.Save(ctx, gs.Job{ID: "b", Queue: "default", Name: "n", RunAt: now, State: gs.StatePending})
+	n, err := s.QueueSize(ctx, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("want 2, got %d", n)
+	}
+}
