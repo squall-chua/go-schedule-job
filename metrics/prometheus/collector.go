@@ -1,6 +1,7 @@
 package prometheus
 
 import (
+	"context"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -67,3 +68,35 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	c.metrics.inFlight.Describe(ch)
 	c.metrics.queueSize.Describe(ch)
 }
+
+// collectTimeout bounds the QueueSize call during a scrape. A scrape that
+// blocks too long can stall Prometheus and cascade alerts.
+const collectTimeout = 2 * time.Second
+
+// Collect implements prometheus.Collector. It refreshes the queue_size gauge
+// by calling Store.QueueSize for each configured queue, then emits every
+// metric family.
+func (c *Collector) Collect(ch chan<- prometheus.Metric) {
+	ctx, cancel := context.WithTimeout(context.Background(), collectTimeout)
+	defer cancel()
+
+	for _, q := range c.queues {
+		n, err := c.store.QueueSize(ctx, q)
+		if err != nil {
+			// Skip this queue; do not overwrite a previous good sample.
+			continue
+		}
+		c.metrics.queueSize.WithLabelValues(q).Set(float64(n))
+	}
+
+	c.metrics.enqueued.Collect(ch)
+	c.metrics.succeeded.Collect(ch)
+	c.metrics.failed.Collect(ch)
+	c.metrics.retried.Collect(ch)
+	c.metrics.duration.Collect(ch)
+	c.metrics.inFlight.Collect(ch)
+	c.metrics.queueSize.Collect(ch)
+}
+
+// Compile-time check that Collector satisfies prometheus.Collector.
+var _ prometheus.Collector = (*Collector)(nil)

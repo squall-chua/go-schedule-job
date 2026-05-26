@@ -249,3 +249,48 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+func TestCollect_SamplesQueueSize(t *testing.T) {
+	fs := &fakeStore{queueSizes: map[string]int{"default": 7, "email": 3}}
+	c := New(fs, []string{"default", "email"})
+
+	// Touch in_flight so it shows up.
+	c.metrics.inFlight.WithLabelValues("default").Set(2)
+
+	got := testutil.ToFloat64(c.metrics.queueSize.WithLabelValues("default"))
+	if got != 0 {
+		t.Fatalf("queue_size before Collect = %v, want 0", got)
+	}
+
+	metricsCh := make(chan prometheus.Metric, 64)
+	go func() {
+		c.Collect(metricsCh)
+		close(metricsCh)
+	}()
+	for range metricsCh {
+	}
+
+	if v := testutil.ToFloat64(c.metrics.queueSize.WithLabelValues("default")); v != 7 {
+		t.Fatalf("queue_size default = %v, want 7", v)
+	}
+	if v := testutil.ToFloat64(c.metrics.queueSize.WithLabelValues("email")); v != 3 {
+		t.Fatalf("queue_size email = %v, want 3", v)
+	}
+}
+
+func TestCollect_QueueSizeError_DoesNotPanic(t *testing.T) {
+	fs := &fakeStore{queueErr: errors.New("db down")}
+	c := New(fs, []string{"default"})
+
+	metricsCh := make(chan prometheus.Metric, 32)
+	go func() {
+		defer close(metricsCh)
+		c.Collect(metricsCh)
+	}()
+	for range metricsCh {
+	}
+	// queueSize stays at zero — no panic, no metric corruption.
+	if v := testutil.ToFloat64(c.metrics.queueSize.WithLabelValues("default")); v != 0 {
+		t.Fatalf("queue_size on error = %v, want 0", v)
+	}
+}
