@@ -16,6 +16,9 @@
 package postgres
 
 import (
+	"context"
+	"fmt"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -23,3 +26,25 @@ import (
 type Store struct {
 	pool *pgxpool.Pool
 }
+
+// New opens a connection pool against the given Postgres DSN and applies the
+// schema. The DSN is in libpq form, e.g.
+//
+//	postgres://user:pass@host:5432/dbname?sslmode=disable
+//
+// Connection pool defaults come from pgxpool; tune via the DSN
+// (e.g. ?pool_max_conns=20) if needed.
+func New(ctx context.Context, dsn string) (*Store, error) {
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("postgres pool: %w", err)
+	}
+	if _, err := pool.Exec(ctx, schema); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("postgres migrate: %w", err)
+	}
+	return &Store{pool: pool}, nil
+}
+
+// Close releases the connection pool.
+func (s *Store) Close() { s.pool.Close() }
