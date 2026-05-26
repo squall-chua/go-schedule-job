@@ -104,3 +104,26 @@ func TestHooks_OnEnqueueIncrements(t *testing.T) {
 		t.Fatalf("high/send-email = %v, want 1", got)
 	}
 }
+
+func TestHooks_OnSuccess(t *testing.T) {
+	c := New(&fakeStore{}, nil)
+	h := c.Hooks()
+
+	// Pre-fill in_flight so the decrement is observable.
+	c.metrics.inFlight.WithLabelValues("default").Set(3)
+
+	h.OnSuccess("id-1", "send-email", "default", 1, 50*time.Millisecond)
+	h.OnSuccess("id-2", "send-email", "default", 2, 250*time.Millisecond)
+
+	if got := testutil.ToFloat64(c.metrics.succeeded.WithLabelValues("default", "send-email")); got != 2 {
+		t.Fatalf("succeeded = %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(c.metrics.inFlight.WithLabelValues("default")); got != 1 {
+		t.Fatalf("in_flight = %v, want 1 (3 - 2)", got)
+	}
+
+	// Histogram sample count via CollectAndCount.
+	if n := testutil.CollectAndCount(c.metrics.duration); n != 1 {
+		t.Fatalf("duration vec series = %d, want 1", n)
+	}
+}

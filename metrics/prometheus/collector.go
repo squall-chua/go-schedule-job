@@ -1,6 +1,8 @@
 package prometheus
 
 import (
+	"time"
+
 	gs "github.com/squall-chua/go-schedule-job"
 )
 
@@ -33,6 +35,11 @@ func (c *Collector) Hooks() gs.Hooks {
 	return gs.Hooks{
 		OnEnqueue: func(_ gs.JobID, name, queue string) {
 			c.metrics.enqueued.WithLabelValues(queue, name).Inc()
+		},
+		OnSuccess: func(_ gs.JobID, name, queue string, _ int, d time.Duration) {
+			c.metrics.succeeded.WithLabelValues(queue, name).Inc()
+			c.metrics.duration.WithLabelValues(queue, name).Observe(d.Seconds())
+			c.metrics.inFlight.WithLabelValues(queue).Dec()
 		},
 	}
 }
