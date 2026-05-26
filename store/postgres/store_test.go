@@ -7,9 +7,11 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	embeddedpostgres "github.com/fergusstrange/embedded-postgres"
 
+	gs "github.com/squall-chua/go-schedule-job"
 	"github.com/squall-chua/go-schedule-job/store/postgres"
 )
 
@@ -71,6 +73,33 @@ func openTestStore(t *testing.T) *postgres.Store {
 	if !sharedAvailable {
 		t.Skip("embedded postgres unavailable; skipping Postgres tests")
 	}
-	t.Skip("Truncate not yet implemented — restored in Task 4")
-	return nil
+	ctx := t.Context()
+	s, err := postgres.New(ctx, sharedDSN)
+	if err != nil {
+		t.Fatalf("postgres.New: %v", err)
+	}
+	if err := s.Truncate(ctx); err != nil {
+		t.Fatalf("Truncate: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return s
+}
+
+func TestPostgresStore_SaveInsertsAndUpserts(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	j := gs.Job{
+		ID: "j1", Queue: "default", Name: "do",
+		Priority: gs.PriorityNormal, RunAt: now,
+		State: gs.StatePending, MaxAttempts: 3, CreatedAt: now,
+	}
+	if err := s.Save(ctx, j); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	// Upsert path.
+	j.Name = "renamed"
+	if err := s.Save(ctx, j); err != nil {
+		t.Fatalf("Save (upsert): %v", err)
+	}
 }
