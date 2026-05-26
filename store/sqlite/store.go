@@ -4,10 +4,12 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
 
+	gs "github.com/squall-chua/go-schedule-job"
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
 )
 
@@ -54,4 +56,50 @@ func fromUnixNano(n int64) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(0, n)
+}
+
+const upsertJobSQL = `
+INSERT INTO jobs (
+    id, queue, name, payload, codec_name, priority, run_at, attempt,
+    max_attempts, state, timeout_ns, locked_by, locked_until, last_error,
+    recurring_id, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    queue=excluded.queue,
+    name=excluded.name,
+    payload=excluded.payload,
+    codec_name=excluded.codec_name,
+    priority=excluded.priority,
+    run_at=excluded.run_at,
+    attempt=excluded.attempt,
+    max_attempts=excluded.max_attempts,
+    state=excluded.state,
+    timeout_ns=excluded.timeout_ns,
+    locked_by=excluded.locked_by,
+    locked_until=excluded.locked_until,
+    last_error=excluded.last_error,
+    recurring_id=excluded.recurring_id,
+    updated_at=excluded.updated_at
+`
+
+func (s *Store) Save(ctx context.Context, j gs.Job) error {
+	state := j.State
+	if state == 0 {
+		state = gs.StatePending
+	}
+	maxAttempts := j.MaxAttempts
+	if maxAttempts == 0 {
+		maxAttempts = 3
+	}
+	_, err := s.db.ExecContext(ctx, upsertJobSQL,
+		string(j.ID), j.Queue, j.Name, j.Payload, j.CodecName,
+		int(j.Priority), toUnixNano(j.RunAt), j.Attempt,
+		maxAttempts, int(state), int64(j.Timeout), j.LockedBy,
+		toUnixNano(j.LockedUntil), j.LastError, string(j.RecurringID),
+		toUnixNano(j.CreatedAt), toUnixNano(j.UpdatedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("sqlite save: %w", err)
+	}
+	return nil
 }
