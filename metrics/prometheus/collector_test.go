@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	gs "github.com/squall-chua/go-schedule-job"
 )
 
@@ -86,4 +87,20 @@ func (f *fakeStore) QueueSize(_ context.Context, q string) (int, error) {
 		return 0, f.queueErr
 	}
 	return f.queueSizes[q], nil
+}
+
+func TestHooks_OnEnqueueIncrements(t *testing.T) {
+	c := New(&fakeStore{}, nil)
+	h := c.Hooks()
+
+	h.OnEnqueue("id-1", "send-email", "default")
+	h.OnEnqueue("id-2", "send-email", "default")
+	h.OnEnqueue("id-3", "send-email", "high")
+
+	if got := testutil.ToFloat64(c.metrics.enqueued.WithLabelValues("default", "send-email")); got != 2 {
+		t.Fatalf("default/send-email = %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(c.metrics.enqueued.WithLabelValues("high", "send-email")); got != 1 {
+		t.Fatalf("high/send-email = %v, want 1", got)
+	}
 }

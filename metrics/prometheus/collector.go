@@ -26,3 +26,13 @@ func New(store gs.Store, queues []string) *Collector {
 		metrics: newMetrics(),
 	}
 }
+
+// Hooks returns a goschedule.Hooks value that drives counter and gauge
+// updates. Pass it to NewScheduler(WithHooks(...)).
+func (c *Collector) Hooks() gs.Hooks {
+	return gs.Hooks{
+		OnEnqueue: func(_ gs.JobID, name, queue string) {
+			c.metrics.enqueued.WithLabelValues(queue, name).Inc()
+		},
+	}
+}
