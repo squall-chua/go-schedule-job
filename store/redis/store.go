@@ -26,9 +26,12 @@ package redis
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/redis/go-redis/v9"
+
+	gs "github.com/squall-chua/go-schedule-job"
 )
 
 // Store implements goschedule.Store backed by Redis.
@@ -87,3 +90,39 @@ func parseAddr(addr string) (*redis.UniversalOptions, error) {
 
 // Close releases the underlying client.
 func (s *Store) Close() error { return s.rdb.Close() }
+
+// Save persists or upserts the job. The HASH stores the full record; the
+// pending ZSET (one per (queue, priority)) carries the ordering index.
+func (s *Store) Save(ctx context.Context, j gs.Job) error {
+	state := j.State
+	if state == 0 {
+		state = gs.StatePending
+	}
+	if j.MaxAttempts == 0 {
+		j.MaxAttempts = 3
+	}
+	j.State = state
+
+	score := float64(0)
+	if !j.RunAt.IsZero() {
+		score = float64(j.RunAt.UnixNano())
+	}
+
+	_, err := s.rdb.TxPipelined(ctx, func(p redis.Pipeliner) error {
+		p.HSet(ctx, jobKey(j.ID), serializeJob(j))
+		if state == gs.StatePending {
+			p.ZAdd(ctx, pendingKey(j.Queue, j.Priority), redis.Z{Score: score, Member: string(j.ID)})
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("redis save: %w", err)
+	}
+	return nil
+}
+
+// asInt parses a HASH field as int, returning 0 on empty/missing.
+func asInt(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
+}

@@ -2,9 +2,11 @@ package redis_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 
+	gs "github.com/squall-chua/go-schedule-job"
 	"github.com/squall-chua/go-schedule-job/store/redis"
 )
 
@@ -19,4 +21,23 @@ func openTestStore(t *testing.T) *redis.Store {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+func TestRedisStore_SaveInsertsAndUpserts(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	j := gs.Job{
+		ID: "j1", Queue: "default", Name: "do",
+		Priority: gs.PriorityNormal, RunAt: now,
+		State: gs.StatePending, MaxAttempts: 3, CreatedAt: now,
+	}
+	if err := s.Save(ctx, j); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	// Upsert path.
+	j.Name = "renamed"
+	if err := s.Save(ctx, j); err != nil {
+		t.Fatalf("Save (upsert): %v", err)
+	}
 }
