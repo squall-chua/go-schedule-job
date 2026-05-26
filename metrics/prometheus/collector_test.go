@@ -158,3 +158,38 @@ func TestHooks_OnRetry(t *testing.T) {
 		t.Fatalf("in_flight = %v, want 0", got)
 	}
 }
+
+func TestHooks_OnStart_IncrementsInFlight(t *testing.T) {
+	c := New(&fakeStore{}, nil)
+	h := c.Hooks()
+
+	h.OnStart("id-1", "send-email", "default", 1)
+	h.OnStart("id-2", "send-email", "default", 1)
+	h.OnStart("id-3", "send-email", "high", 1)
+
+	if got := testutil.ToFloat64(c.metrics.inFlight.WithLabelValues("default")); got != 2 {
+		t.Fatalf("default in_flight = %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(c.metrics.inFlight.WithLabelValues("high")); got != 1 {
+		t.Fatalf("high in_flight = %v, want 1", got)
+	}
+}
+
+// Verify the full lifecycle balances back to zero.
+func TestHooks_InFlight_BalancedLifecycle(t *testing.T) {
+	c := New(&fakeStore{}, nil)
+	h := c.Hooks()
+
+	h.OnStart("id-1", "send-email", "q", 1)
+	h.OnSuccess("id-1", "send-email", "q", 1, 5*time.Millisecond)
+
+	h.OnStart("id-2", "send-email", "q", 1)
+	h.OnRetry("id-2", "send-email", "q", 1, errors.New("x"), time.Now())
+
+	h.OnStart("id-3", "send-email", "q", 1)
+	h.OnFailure("id-3", "send-email", "q", 3, errors.New("x"))
+
+	if got := testutil.ToFloat64(c.metrics.inFlight.WithLabelValues("q")); got != 0 {
+		t.Fatalf("in_flight after balanced lifecycle = %v, want 0", got)
+	}
+}

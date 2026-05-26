@@ -36,6 +36,9 @@ func (c *Collector) Hooks() gs.Hooks {
 		OnEnqueue: func(_ gs.JobID, name, queue string) {
 			c.metrics.enqueued.WithLabelValues(queue, name).Inc()
 		},
+		OnStart: func(_ gs.JobID, _, queue string, _ int) {
+			c.metrics.inFlight.WithLabelValues(queue).Inc()
+		},
 		OnSuccess: func(_ gs.JobID, name, queue string, _ int, d time.Duration) {
 			c.metrics.succeeded.WithLabelValues(queue, name).Inc()
 			c.metrics.duration.WithLabelValues(queue, name).Observe(d.Seconds())
