@@ -430,3 +430,26 @@ func (s *Store) UpdateRecurringNextRun(ctx context.Context, id gs.JobID, nextRun
 	}
 	return nil
 }
+
+func (s *Store) AcquireRecurringLease(ctx context.Context, specID gs.JobID, leaseUntil time.Time, workerID string) (bool, error) {
+	ttl := time.Until(leaseUntil)
+	if ttl <= 0 {
+		return false, nil
+	}
+	ttlSec := int64(ttl / time.Second)
+	if ttlSec < 1 {
+		ttlSec = 1 // minimum granularity Redis EX supports is 1 second
+	}
+	res, err := acquireLeaseScript.Run(ctx, s.rdb,
+		[]string{leaseKey(specID)},
+		workerID, strconv.FormatInt(ttlSec, 10),
+	).Result()
+	if err != nil {
+		return false, fmt.Errorf("redis acquire lease: %w", err)
+	}
+	n, ok := res.(int64)
+	if !ok {
+		return false, fmt.Errorf("redis acquire lease: unexpected result type %T", res)
+	}
+	return n == 1, nil
+}

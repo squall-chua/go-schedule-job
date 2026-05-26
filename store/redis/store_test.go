@@ -331,3 +331,48 @@ func TestRedisStore_UpdateRecurringNextRun(t *testing.T) {
 		t.Errorf("update did not apply: %+v", list[0])
 	}
 }
+
+func TestRedisStore_AcquireRecurringLease(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	_ = s.UpsertRecurring(ctx, gs.RecurringSpec{ID: "r1", Name: "n", Queue: "default", Every: time.Second})
+
+	ok, err := s.AcquireRecurringLease(ctx, "r1", now.Add(time.Minute), "w1")
+	if err != nil || !ok {
+		t.Fatalf("first lease: ok=%v err=%v", ok, err)
+	}
+	ok2, err := s.AcquireRecurringLease(ctx, "r1", now.Add(time.Minute), "w2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok2 {
+		t.Error("second lease should be rejected while first holds it")
+	}
+}
+
+func TestRedisStore_AcquireRecurringLeaseMissingSpec(t *testing.T) {
+	s := openTestStore(t)
+	ok, err := s.AcquireRecurringLease(t.Context(), "ghost", time.Now().Add(time.Minute), "w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Error("missing spec: expected (true, nil) to match conformance suite")
+	}
+}
+
+func TestRedisStore_AcquireRecurringLeaseSameWorker(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	_ = s.UpsertRecurring(ctx, gs.RecurringSpec{ID: "r1", Name: "n", Queue: "default", Every: time.Second})
+
+	now := time.Now().UTC()
+	if ok, _ := s.AcquireRecurringLease(ctx, "r1", now.Add(time.Minute), "w1"); !ok {
+		t.Fatal("first lease should succeed")
+	}
+	// Same worker re-acquires (extends) the lease.
+	if ok, _ := s.AcquireRecurringLease(ctx, "r1", now.Add(2*time.Minute), "w1"); !ok {
+		t.Fatal("same-worker re-acquire should succeed")
+	}
+}
