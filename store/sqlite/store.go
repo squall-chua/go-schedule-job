@@ -161,6 +161,137 @@ func (s *Store) ClaimDue(ctx context.Context, queue string, now time.Time, n int
 	return out, nil
 }
 
+// --- Ack ---
+
+const ackSQL = `DELETE FROM jobs WHERE id = ? AND state = ?`
+
+func (s *Store) Ack(ctx context.Context, id gs.JobID) error {
+	res, err := s.db.ExecContext(ctx, ackSQL, string(id), int(gs.StateClaimed))
+	if err != nil {
+		return fmt.Errorf("sqlite ack: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite ack rows: %w", err)
+	}
+	if rows == 0 {
+		return gs.ErrJobNotFound
+	}
+	return nil
+}
+
+// --- Fail ---
+
+const failSelectSQL = `SELECT attempt, max_attempts FROM jobs WHERE id = ? AND state = ?`
+const failDeleteSQL = `DELETE FROM jobs WHERE id = ?`
+const failRetrySQL = `
+UPDATE jobs SET
+    attempt = attempt + 1,
+    last_error = ?,
+    state = ?,
+    run_at = ?,
+    locked_by = '',
+    locked_until = 0,
+    updated_at = ?
+WHERE id = ? AND state = ?
+`
+
+func (s *Store) Fail(ctx context.Context, id gs.JobID, errMsg string, nextAttemptAt time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlite fail begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	var attempt, maxAttempts int
+	row := tx.QueryRowContext(ctx, failSelectSQL, string(id), int(gs.StateClaimed))
+	if err := row.Scan(&attempt, &maxAttempts); err != nil {
+		if err == sql.ErrNoRows {
+			return gs.ErrJobNotFound
+		}
+		return fmt.Errorf("sqlite fail select: %w", err)
+	}
+	nextAttempt := attempt + 1
+	if maxAttempts > 0 && nextAttempt >= maxAttempts {
+		if _, err := tx.ExecContext(ctx, failDeleteSQL, string(id)); err != nil {
+			return fmt.Errorf("sqlite fail terminal: %w", err)
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, failRetrySQL,
+			errMsg, int(gs.StatePending), toUnixNano(nextAttemptAt),
+			toUnixNano(time.Now()), string(id), int(gs.StateClaimed),
+		); err != nil {
+			return fmt.Errorf("sqlite fail retry: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite fail commit: %w", err)
+	}
+	return nil
+}
+
+// --- Cancel ---
+
+const cancelSelectSQL = `SELECT state FROM jobs WHERE id = ?`
+const cancelDeleteSQL = `DELETE FROM jobs WHERE id = ?`
+
+func (s *Store) Cancel(ctx context.Context, id gs.JobID) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlite cancel begin: %w", err)
+	}
+	defer tx.Rollback()
+	var state int
+	row := tx.QueryRowContext(ctx, cancelSelectSQL, string(id))
+	if err := row.Scan(&state); err != nil {
+		if err == sql.ErrNoRows {
+			return gs.ErrJobNotFound
+		}
+		return fmt.Errorf("sqlite cancel select: %w", err)
+	}
+	if gs.State(state) != gs.StatePending {
+		return gs.ErrJobNotPending
+	}
+	if _, err := tx.ExecContext(ctx, cancelDeleteSQL, string(id)); err != nil {
+		return fmt.Errorf("sqlite cancel delete: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite cancel commit: %w", err)
+	}
+	return nil
+}
+
+// --- Reschedule ---
+
+const rescheduleSelectSQL = `SELECT state FROM jobs WHERE id = ?`
+const rescheduleUpdateSQL = `UPDATE jobs SET run_at = ?, updated_at = ? WHERE id = ?`
+
+func (s *Store) Reschedule(ctx context.Context, id gs.JobID, newTime time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlite reschedule begin: %w", err)
+	}
+	defer tx.Rollback()
+	var state int
+	row := tx.QueryRowContext(ctx, rescheduleSelectSQL, string(id))
+	if err := row.Scan(&state); err != nil {
+		if err == sql.ErrNoRows {
+			return gs.ErrJobNotFound
+		}
+		return fmt.Errorf("sqlite reschedule select: %w", err)
+	}
+	if gs.State(state) != gs.StatePending {
+		return gs.ErrJobNotPending
+	}
+	if _, err := tx.ExecContext(ctx, rescheduleUpdateSQL, toUnixNano(newTime), toUnixNano(time.Now()), string(id)); err != nil {
+		return fmt.Errorf("sqlite reschedule update: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite reschedule commit: %w", err)
+	}
+	return nil
+}
+
 // scanJob reads a row matching the SELECT projection used by ClaimDue.
 func scanJob(rows *sql.Rows) (gs.Job, error) {
 	var j gs.Job
