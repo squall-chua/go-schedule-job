@@ -103,3 +103,95 @@ func (s *Store) Save(ctx context.Context, j gs.Job) error {
 	}
 	return nil
 }
+
+const claimSelectSQL = `
+SELECT id, queue, name, payload, codec_name, priority, run_at, attempt,
+       max_attempts, state, timeout_ns, locked_by, locked_until, last_error,
+       recurring_id, created_at, updated_at
+FROM jobs
+WHERE queue = ? AND state = ? AND run_at <= ?
+ORDER BY priority DESC, run_at ASC
+LIMIT ?
+`
+
+const claimUpdateSQL = `
+UPDATE jobs SET state = ?, locked_by = ?, locked_until = ?, updated_at = ?
+WHERE id = ?
+`
+
+func (s *Store) ClaimDue(ctx context.Context, queue string, now time.Time, n int, workerID string, lockUntil time.Time) ([]gs.Job, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite claim begin: %w", err)
+	}
+	defer tx.Rollback() // safe to call after Commit
+
+	rows, err := tx.QueryContext(ctx, claimSelectSQL, queue, int(gs.StatePending), toUnixNano(now), n)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite claim select: %w", err)
+	}
+	var out []gs.Job
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlite claim iterate: %w", err)
+	}
+	rows.Close()
+
+	for i := range out {
+		out[i].State = gs.StateClaimed
+		out[i].LockedBy = workerID
+		out[i].LockedUntil = lockUntil
+		out[i].UpdatedAt = now
+		if _, err := tx.ExecContext(ctx, claimUpdateSQL,
+			int(gs.StateClaimed), workerID, toUnixNano(lockUntil), toUnixNano(now), string(out[i].ID),
+		); err != nil {
+			return nil, fmt.Errorf("sqlite claim update: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("sqlite claim commit: %w", err)
+	}
+	return out, nil
+}
+
+// scanJob reads a row matching the SELECT projection used by ClaimDue.
+func scanJob(rows *sql.Rows) (gs.Job, error) {
+	var j gs.Job
+	var id, queue, name, codecName, lockedBy, lastError, recurringID string
+	var payload []byte
+	var priority, attempt, maxAttempts, state int
+	var runAt, timeoutNs, lockedUntil, createdAt, updatedAt int64
+	if err := rows.Scan(
+		&id, &queue, &name, &payload, &codecName, &priority,
+		&runAt, &attempt, &maxAttempts, &state, &timeoutNs,
+		&lockedBy, &lockedUntil, &lastError, &recurringID,
+		&createdAt, &updatedAt,
+	); err != nil {
+		return j, fmt.Errorf("sqlite scan job: %w", err)
+	}
+	j.ID = gs.JobID(id)
+	j.Queue = queue
+	j.Name = name
+	j.Payload = payload
+	j.CodecName = codecName
+	j.Priority = gs.Priority(priority)
+	j.RunAt = fromUnixNano(runAt)
+	j.Attempt = attempt
+	j.MaxAttempts = maxAttempts
+	j.State = gs.State(state)
+	j.Timeout = time.Duration(timeoutNs)
+	j.LockedBy = lockedBy
+	j.LockedUntil = fromUnixNano(lockedUntil)
+	j.LastError = lastError
+	j.RecurringID = gs.JobID(recurringID)
+	j.CreatedAt = fromUnixNano(createdAt)
+	j.UpdatedAt = fromUnixNano(updatedAt)
+	return j, nil
+}

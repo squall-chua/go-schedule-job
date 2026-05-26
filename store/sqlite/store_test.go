@@ -70,3 +70,41 @@ func TestSQLiteStore_SaveInsertsRow(t *testing.T) {
 		t.Fatalf("Save (upsert): %v", err)
 	}
 }
+
+func TestSQLiteStore_ClaimDueRespectsPriority(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	mkj := func(id string, p gs.Priority, runAt time.Time) gs.Job {
+		return gs.Job{ID: gs.JobID(id), Queue: "default", Name: "n", Priority: p, RunAt: runAt, State: gs.StatePending, MaxAttempts: 3, CreatedAt: now}
+	}
+	_ = s.Save(ctx, mkj("low", gs.PriorityLow, now.Add(-2*time.Second)))
+	_ = s.Save(ctx, mkj("crit", gs.PriorityCritical, now.Add(-1*time.Second)))
+
+	got, err := s.ClaimDue(ctx, "default", now, 10, "w1", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 jobs, got %d", len(got))
+	}
+	if got[0].ID != "crit" || got[1].ID != "low" {
+		t.Errorf("priority order wrong: %+v", []gs.JobID{got[0].ID, got[1].ID})
+	}
+	for _, j := range got {
+		if j.State != gs.StateClaimed || j.LockedBy != "w1" {
+			t.Errorf("job %s not marked claimed: %+v", j.ID, j)
+		}
+	}
+}
+
+func TestSQLiteStore_ClaimDueSkipsFutureJobs(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	_ = s.Save(ctx, gs.Job{ID: "later", Queue: "default", Name: "n", RunAt: now.Add(time.Hour), State: gs.StatePending, MaxAttempts: 3, CreatedAt: now})
+	got, _ := s.ClaimDue(ctx, "default", now, 10, "w", now.Add(time.Minute))
+	if len(got) != 0 {
+		t.Errorf("future job claimed: %+v", got)
+	}
+}
