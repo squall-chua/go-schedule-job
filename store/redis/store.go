@@ -259,6 +259,44 @@ func (s *Store) Cancel(ctx context.Context, id gs.JobID) error {
 	}
 }
 
+func (s *Store) Heartbeat(ctx context.Context, workerID string, now time.Time) error {
+	if err := s.rdb.HSet(ctx, workersKey, workerID, formatTime(now)).Err(); err != nil {
+		return fmt.Errorf("redis heartbeat: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) RecoverStale(ctx context.Context, _ time.Time) (int, error) {
+	res, err := recoverStaleScript.Run(ctx, s.rdb,
+		[]string{claimedKey},
+		keyPrefix+"job:", keyPrefix+"pending:", strconv.Itoa(int(gs.StatePending)),
+	).Result()
+	if err != nil {
+		return 0, fmt.Errorf("redis recover stale: %w", err)
+	}
+	n, ok := res.(int64)
+	if !ok {
+		return 0, fmt.Errorf("redis recover stale: unexpected result type %T", res)
+	}
+	return int(n), nil
+}
+
+func (s *Store) QueueSize(ctx context.Context, queue string) (int, error) {
+	pipe := s.rdb.Pipeline()
+	cmds := make([]*redis.IntCmd, 0, 4)
+	for _, p := range []gs.Priority{gs.PriorityLow, gs.PriorityNormal, gs.PriorityHigh, gs.PriorityCritical} {
+		cmds = append(cmds, pipe.ZCard(ctx, pendingKey(queue, p)))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return 0, fmt.Errorf("redis queue size: %w", err)
+	}
+	var total int64
+	for _, c := range cmds {
+		total += c.Val()
+	}
+	return int(total), nil
+}
+
 func (s *Store) Reschedule(ctx context.Context, id gs.JobID, newTime time.Time) error {
 	fields, err := s.rdb.HMGet(ctx, jobKey(id), "queue", "priority").Result()
 	if err != nil {
