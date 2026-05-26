@@ -10,7 +10,7 @@ In-process job scheduler for Go. One-shot and recurring jobs, named queues with 
 - **Retries** with configurable exponential backoff and max attempts.
 - **Per-job timeouts** via `context.Context`.
 - **Cancel** and **Reschedule** by `JobID`.
-- **Typed payloads** via the `Codec` interface — JSON codec ships separately.
+- **Typed payloads** via the `Codec` interface — JSON and Protocol Buffers codecs ship separately.
 - **Lifecycle hooks** (`OnEnqueue`/`OnStart`/`OnSuccess`/`OnFailure`/`OnRetry`) and `log/slog` integration.
 - **Pluggable stores**: in-memory (default), SQLite (single-node persistent), Postgres (distributed, `LISTEN/NOTIFY` wake-ups), Redis (distributed, Cluster-compatible).
 - **Distributed coordination**: per-worker heartbeats, visibility timeouts, stale-claim recovery, recurring-schedule leases.
@@ -27,8 +27,9 @@ go get github.com/squall-chua/go-schedule-job/store/sqlite
 go get github.com/squall-chua/go-schedule-job/store/postgres
 go get github.com/squall-chua/go-schedule-job/store/redis
 
-# Optional codec for typed payloads
+# Optional codecs for typed payloads
 go get github.com/squall-chua/go-schedule-job/codec/json
+go get github.com/squall-chua/go-schedule-job/codec/proto
 
 # Optional Prometheus collector
 go get github.com/squall-chua/go-schedule-job/metrics/prometheus
@@ -184,7 +185,27 @@ gs.EveryTyped(sched, time.Hour, "send-email", codec, EmailJob{...})
 gs.CronTyped(sched, "0 8 * * *", "send-email", codec, EmailJob{...})
 ```
 
-`Codec` is a 3-method interface; implement your own for protobuf, msgpack, etc.
+`Codec` is a 3-method interface. A Protocol Buffers codec ships in `codec/proto`:
+
+```go
+import (
+    protocodec "github.com/squall-chua/go-schedule-job/codec/proto"
+    "google.golang.org/protobuf/types/known/wrapperspb"
+)
+
+codec := protocodec.New()
+
+gs.RegisterTyped[*wrapperspb.StringValue](sched, "echo", codec,
+    func(ctx context.Context, m *wrapperspb.StringValue) error {
+        fmt.Println(m.GetValue())
+        return nil
+    },
+)
+
+gs.NowTyped(sched, "echo", codec, wrapperspb.String("ping"))
+```
+
+Payload types passed to the proto codec must implement `proto.Message` — generated `*mypb.Foo` types from `protoc-gen-go` work directly. Implement your own `Codec` for msgpack, CBOR, etc.
 
 ### Lifecycle hooks and slog
 
@@ -303,6 +324,7 @@ Exposed metrics:
 ```
 .                                # core module — Scheduler, Store interface, memstore, hooks
 codec/json/                      # JSON Codec
+codec/proto/                     # Protocol Buffers Codec
 store/sqlite/                    # SQLite backend (modernc.org/sqlite — pure Go)
 store/postgres/                  # Postgres backend (jackc/pgx v5)
 store/redis/                     # Redis backend (redis/go-redis v9, standalone + Cluster)
