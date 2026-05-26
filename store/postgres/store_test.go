@@ -433,3 +433,44 @@ func TestPostgresStore_AcquireRecurringLeaseMissingSpec(t *testing.T) {
 		t.Error("missing spec: expected (true, nil) to match conformance suite")
 	}
 }
+
+func TestPostgresStore_ListenNotifiesOnSave(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	l, err := s.Listen(ctx, "default")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer l.Close()
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if err := s.Save(ctx, gs.Job{ID: "j", Queue: "default", Name: "n", RunAt: now, State: gs.StatePending, MaxAttempts: 3, CreatedAt: now}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	select {
+	case <-l.C:
+		// success
+	case <-time.After(3 * time.Second):
+		t.Fatal("Listener did not receive NOTIFY within 3s")
+	}
+}
+
+func TestPostgresStore_ListenIgnoresOtherQueues(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	l, err := s.Listen(ctx, "queue-a")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer l.Close()
+
+	// Save into a different queue; listener must NOT fire.
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	_ = s.Save(ctx, gs.Job{ID: "j", Queue: "queue-b", Name: "n", RunAt: now, State: gs.StatePending, MaxAttempts: 3, CreatedAt: now})
+	select {
+	case <-l.C:
+		t.Fatal("Listener for queue-a should not fire on queue-b save")
+	case <-time.After(500 * time.Millisecond):
+		// expected
+	}
+}
