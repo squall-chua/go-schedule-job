@@ -3,6 +3,7 @@ package prometheus
 import (
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	gs "github.com/squall-chua/go-schedule-job"
 )
 
@@ -53,4 +54,16 @@ func (c *Collector) Hooks() gs.Hooks {
 			c.metrics.inFlight.WithLabelValues(queue).Dec()
 		},
 	}
+}
+
+// Describe implements prometheus.Collector. It emits the descriptors for every
+// metric family the Collector owns.
+func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
+	c.metrics.enqueued.Describe(ch)
+	c.metrics.succeeded.Describe(ch)
+	c.metrics.failed.Describe(ch)
+	c.metrics.retried.Describe(ch)
+	c.metrics.duration.Describe(ch)
+	c.metrics.inFlight.Describe(ch)
+	c.metrics.queueSize.Describe(ch)
 }

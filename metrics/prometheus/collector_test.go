@@ -193,3 +193,59 @@ func TestHooks_InFlight_BalancedLifecycle(t *testing.T) {
 		t.Fatalf("in_flight after balanced lifecycle = %v, want 0", got)
 	}
 }
+
+func TestDescribe_EmitsAllDescriptors(t *testing.T) {
+	c := New(&fakeStore{}, []string{"default"})
+
+	descs := make(chan *prometheus.Desc, 32)
+	go func() {
+		c.Describe(descs)
+		close(descs)
+	}()
+
+	var got []string
+	for d := range descs {
+		got = append(got, d.String())
+	}
+
+	// 7 distinct metric families.
+	if len(got) < 7 {
+		t.Fatalf("Describe emitted %d descs, want >= 7: %v", len(got), got)
+	}
+
+	// Sanity: each family appears.
+	must := []string{
+		"goschedule_jobs_enqueued_total",
+		"goschedule_jobs_succeeded_total",
+		"goschedule_jobs_failed_total",
+		"goschedule_jobs_retried_total",
+		"goschedule_job_duration_seconds",
+		"goschedule_jobs_in_flight",
+		"goschedule_queue_size",
+	}
+	for _, m := range must {
+		found := false
+		for _, d := range got {
+			if containsName(d, m) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing descriptor %q in %v", m, got)
+		}
+	}
+}
+
+func containsName(desc, name string) bool {
+	return len(desc) > 0 && len(name) > 0 && (indexOf(desc, name) >= 0)
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}
