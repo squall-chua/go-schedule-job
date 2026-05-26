@@ -227,3 +227,34 @@ func (s *Store) Fail(ctx context.Context, id gs.JobID, errMsg string, nextAttemp
 	}
 	return nil
 }
+
+func (s *Store) Cancel(ctx context.Context, id gs.JobID) error {
+	fields, err := s.rdb.HMGet(ctx, jobKey(id), "queue", "priority").Result()
+	if err != nil {
+		return fmt.Errorf("redis cancel lookup: %w", err)
+	}
+	if fields[0] == nil {
+		return gs.ErrJobNotFound
+	}
+	queue, _ := fields[0].(string)
+	priorityStr, _ := fields[1].(string)
+	priority := gs.Priority(asInt(priorityStr))
+
+	res, err := cancelScript.Run(ctx, s.rdb,
+		[]string{jobKey(id), pendingKey(queue, priority)},
+		string(id), strconv.Itoa(int(gs.StatePending)),
+	).Result()
+	if err != nil {
+		return fmt.Errorf("redis cancel: %w", err)
+	}
+	switch res {
+	case "ok":
+		return nil
+	case "missing":
+		return gs.ErrJobNotFound
+	case "not_pending":
+		return gs.ErrJobNotPending
+	default:
+		return fmt.Errorf("redis cancel: unexpected script result %v", res)
+	}
+}
