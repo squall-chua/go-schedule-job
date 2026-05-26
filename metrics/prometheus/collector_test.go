@@ -143,3 +143,18 @@ func TestHooks_OnFailure(t *testing.T) {
 		t.Fatalf("in_flight = %v, want 1", got)
 	}
 }
+
+func TestHooks_OnRetry(t *testing.T) {
+	c := New(&fakeStore{}, nil)
+	h := c.Hooks()
+	c.metrics.inFlight.WithLabelValues("default").Set(1)
+
+	h.OnRetry("id-1", "send-email", "default", 1, errors.New("retry"), time.Now().Add(time.Second))
+
+	if got := testutil.ToFloat64(c.metrics.retried.WithLabelValues("default", "send-email")); got != 1 {
+		t.Fatalf("retried = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(c.metrics.inFlight.WithLabelValues("default")); got != 0 {
+		t.Fatalf("in_flight = %v, want 0", got)
+	}
+}

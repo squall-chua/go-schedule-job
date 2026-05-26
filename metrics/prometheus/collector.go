@@ -45,5 +45,9 @@ func (c *Collector) Hooks() gs.Hooks {
 			c.metrics.failed.WithLabelValues(queue, name).Inc()
 			c.metrics.inFlight.WithLabelValues(queue).Dec()
 		},
+		OnRetry: func(_ gs.JobID, name, queue string, _ int, _ error, _ time.Time) {
+			c.metrics.retried.WithLabelValues(queue, name).Inc()
+			c.metrics.inFlight.WithLabelValues(queue).Dec()
+		},
 	}
 }
