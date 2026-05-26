@@ -18,7 +18,9 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	gs "github.com/squall-chua/go-schedule-job"
@@ -120,4 +122,103 @@ func (s *Store) Save(ctx context.Context, j gs.Job) error {
 // quoted string so any queue name is safe regardless of characters.
 func notifyChannel(queue string) string {
 	return "goschedule_" + queue
+}
+
+const claimDueSQL = `
+WITH due AS (
+    SELECT id FROM jobs
+    WHERE queue = $1 AND state = $2 AND run_at <= $3
+    ORDER BY priority DESC, run_at ASC
+    LIMIT $4
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE jobs
+SET state = $5, locked_by = $6, locked_until = $7, updated_at = $8
+FROM due
+WHERE jobs.id = due.id
+RETURNING jobs.id, jobs.queue, jobs.name, jobs.payload, jobs.codec_name,
+          jobs.priority, jobs.run_at, jobs.attempt, jobs.max_attempts,
+          jobs.state, jobs.timeout_ns, jobs.locked_by, jobs.locked_until,
+          jobs.last_error, jobs.recurring_id, jobs.created_at, jobs.updated_at
+`
+
+func (s *Store) ClaimDue(ctx context.Context, queue string, now time.Time, n int, workerID string, lockUntil time.Time) ([]gs.Job, error) {
+	rows, err := s.pool.Query(ctx, claimDueSQL,
+		queue, int(gs.StatePending), now, n,
+		int(gs.StateClaimed), workerID, lockUntil, now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("postgres claim: %w", err)
+	}
+	defer rows.Close()
+	var out []gs.Job
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres claim iterate: %w", err)
+	}
+	// Postgres returns rows in arbitrary order; the SQL spec doesn't guarantee
+	// RETURNING preserves ORDER BY of the CTE. Sort to honor the
+	// "priority DESC, run_at ASC" contract callers depend on.
+	sortJobs(out)
+	return out, nil
+}
+
+func sortJobs(js []gs.Job) {
+	// Insertion sort suffices — claim batches are small (default ~32).
+	for i := 1; i < len(js); i++ {
+		j := js[i]
+		k := i - 1
+		for k >= 0 && jobLess(j, js[k]) {
+			js[k+1] = js[k]
+			k--
+		}
+		js[k+1] = j
+	}
+}
+
+// jobLess: higher priority comes first; ties broken by earlier run_at.
+func jobLess(a, b gs.Job) bool {
+	if a.Priority != b.Priority {
+		return a.Priority > b.Priority
+	}
+	return a.RunAt.Before(b.RunAt)
+}
+
+// scanJob reads a single row from ClaimDue's RETURNING projection. Accepts
+// pgx.Rows so it can be shared with future single-row helpers via pgx.Row.
+func scanJob(rows pgx.Rows) (gs.Job, error) {
+	var j gs.Job
+	var id, queue, name, codecName, lockedBy, lastError, recurringID string
+	var payload []byte
+	var priority, state int16
+	var attempt, maxAttempts int32
+	var timeoutNs int64
+	if err := rows.Scan(
+		&id, &queue, &name, &payload, &codecName,
+		&priority, &j.RunAt, &attempt, &maxAttempts,
+		&state, &timeoutNs, &lockedBy, &j.LockedUntil,
+		&lastError, &recurringID, &j.CreatedAt, &j.UpdatedAt,
+	); err != nil {
+		return j, fmt.Errorf("postgres scan job: %w", err)
+	}
+	j.ID = gs.JobID(id)
+	j.Queue = queue
+	j.Name = name
+	j.Payload = payload
+	j.CodecName = codecName
+	j.Priority = gs.Priority(priority)
+	j.Attempt = int(attempt)
+	j.MaxAttempts = int(maxAttempts)
+	j.State = gs.State(state)
+	j.Timeout = time.Duration(timeoutNs)
+	j.LockedBy = lockedBy
+	j.LastError = lastError
+	j.RecurringID = gs.JobID(recurringID)
+	return j, nil
 }
