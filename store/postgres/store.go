@@ -190,6 +190,19 @@ func jobLess(a, b gs.Job) bool {
 	return a.RunAt.Before(b.RunAt)
 }
 
+const ackSQL = `DELETE FROM jobs WHERE id = $1 AND state = $2`
+
+func (s *Store) Ack(ctx context.Context, id gs.JobID) error {
+	tag, err := s.pool.Exec(ctx, ackSQL, string(id), int(gs.StateClaimed))
+	if err != nil {
+		return fmt.Errorf("postgres ack: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return gs.ErrJobNotFound
+	}
+	return nil
+}
+
 // scanJob reads a single row from ClaimDue's RETURNING projection. Accepts
 // pgx.Rows so it can be shared with future single-row helpers via pgx.Row.
 func scanJob(rows pgx.Rows) (gs.Job, error) {
