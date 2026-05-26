@@ -328,3 +328,105 @@ func (s *Store) Reschedule(ctx context.Context, id gs.JobID, newTime time.Time) 
 		return fmt.Errorf("redis reschedule: unexpected script result %v", res)
 	}
 }
+
+func serializeRecurring(spec gs.RecurringSpec) map[string]any {
+	return map[string]any{
+		"id":           string(spec.ID),
+		"name":         spec.Name,
+		"queue":        spec.Queue,
+		"payload":      string(spec.Payload),
+		"codec_name":   spec.CodecName,
+		"priority":     strconv.Itoa(int(spec.Priority)),
+		"timeout_ns":   strconv.FormatInt(int64(spec.Timeout), 10),
+		"max_attempts": strconv.Itoa(spec.MaxAttempts),
+		"cron":         spec.Cron,
+		"every_ns":     strconv.FormatInt(int64(spec.Every), 10),
+		"catchup":      strconv.FormatBool(spec.Catchup),
+		"next_run_at":  formatTime(spec.NextRunAt),
+		"last_fire_at": formatTime(spec.LastFireAt),
+	}
+}
+
+func deserializeRecurring(m map[string]string) gs.RecurringSpec {
+	priority, _ := strconv.Atoi(m["priority"])
+	maxAttempts, _ := strconv.Atoi(m["max_attempts"])
+	timeoutNs, _ := strconv.ParseInt(m["timeout_ns"], 10, 64)
+	everyNs, _ := strconv.ParseInt(m["every_ns"], 10, 64)
+	catchup, _ := strconv.ParseBool(m["catchup"])
+	return gs.RecurringSpec{
+		ID:          gs.JobID(m["id"]),
+		Name:        m["name"],
+		Queue:       m["queue"],
+		Payload:     []byte(m["payload"]),
+		CodecName:   m["codec_name"],
+		Priority:    gs.Priority(priority),
+		Timeout:     time.Duration(timeoutNs),
+		MaxAttempts: maxAttempts,
+		Cron:        m["cron"],
+		Every:       time.Duration(everyNs),
+		Catchup:     catchup,
+		NextRunAt:   parseTime(m["next_run_at"]),
+		LastFireAt:  parseTime(m["last_fire_at"]),
+	}
+}
+
+func (s *Store) UpsertRecurring(ctx context.Context, spec gs.RecurringSpec) error {
+	_, err := s.rdb.TxPipelined(ctx, func(p redis.Pipeliner) error {
+		p.HSet(ctx, recurringKey(spec.ID), serializeRecurring(spec))
+		p.SAdd(ctx, recurringAllKey, string(spec.ID))
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("redis upsert recurring: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListRecurring(ctx context.Context) ([]gs.RecurringSpec, error) {
+	ids, err := s.rdb.SMembers(ctx, recurringAllKey).Result()
+	if err != nil {
+		return nil, fmt.Errorf("redis list recurring: %w", err)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	pipe := s.rdb.Pipeline()
+	gets := make([]*redis.MapStringStringCmd, len(ids))
+	for i, id := range ids {
+		gets[i] = pipe.HGetAll(ctx, recurringKey(gs.JobID(id)))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, fmt.Errorf("redis list recurring hgetall: %w", err)
+	}
+	out := make([]gs.RecurringSpec, 0, len(gets))
+	for _, g := range gets {
+		m := g.Val()
+		if len(m) == 0 {
+			continue // stale ID in the set; skip
+		}
+		out = append(out, deserializeRecurring(m))
+	}
+	return out, nil
+}
+
+func (s *Store) DeleteRecurring(ctx context.Context, id gs.JobID) error {
+	_, err := s.rdb.TxPipelined(ctx, func(p redis.Pipeliner) error {
+		p.Del(ctx, recurringKey(id))
+		p.SRem(ctx, recurringAllKey, string(id))
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("redis delete recurring: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) UpdateRecurringNextRun(ctx context.Context, id gs.JobID, nextRunAt, lastFireAt time.Time) error {
+	if err := s.rdb.HSet(ctx, recurringKey(id),
+		"next_run_at", formatTime(nextRunAt),
+		"last_fire_at", formatTime(lastFireAt),
+	).Err(); err != nil {
+		return fmt.Errorf("redis update recurring next: %w", err)
+	}
+	return nil
+}
