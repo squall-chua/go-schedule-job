@@ -40,9 +40,6 @@ func TestNewMetrics_AllVecsNonNil(t *testing.T) {
 	_ = m.duration.WithLabelValues("q", "n")
 	_ = m.inFlight.WithLabelValues("q").Desc()
 	_ = m.queueSize.WithLabelValues("q").Desc()
-
-	// Silence unused import.
-	var _ prometheus.Collector = (*prometheus.CounterVec)(nil)
 }
 
 func TestNew_StoresArgs(t *testing.T) {
