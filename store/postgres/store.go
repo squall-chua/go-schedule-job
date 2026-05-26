@@ -17,6 +17,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -199,6 +200,54 @@ func (s *Store) Ack(ctx context.Context, id gs.JobID) error {
 	}
 	if tag.RowsAffected() == 0 {
 		return gs.ErrJobNotFound
+	}
+	return nil
+}
+
+const failSelectSQL = `SELECT attempt, max_attempts FROM jobs WHERE id = $1 AND state = $2`
+const failDeleteSQL = `DELETE FROM jobs WHERE id = $1`
+const failRetrySQL = `
+UPDATE jobs SET
+    attempt = attempt + 1,
+    last_error = $1,
+    state = $2,
+    run_at = $3,
+    locked_by = '',
+    locked_until = '0001-01-01 00:00:00+00',
+    updated_at = $4
+WHERE id = $5 AND state = $6
+`
+
+func (s *Store) Fail(ctx context.Context, id gs.JobID, errMsg string, nextAttemptAt time.Time) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("postgres fail begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var attempt, maxAttempts int32
+	row := tx.QueryRow(ctx, failSelectSQL, string(id), int(gs.StateClaimed))
+	if err := row.Scan(&attempt, &maxAttempts); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return gs.ErrJobNotFound
+		}
+		return fmt.Errorf("postgres fail select: %w", err)
+	}
+	nextAttempt := int(attempt) + 1
+	if maxAttempts > 0 && nextAttempt >= int(maxAttempts) {
+		if _, err := tx.Exec(ctx, failDeleteSQL, string(id)); err != nil {
+			return fmt.Errorf("postgres fail terminal: %w", err)
+		}
+	} else {
+		if _, err := tx.Exec(ctx, failRetrySQL,
+			errMsg, int(gs.StatePending), nextAttemptAt,
+			time.Now(), string(id), int(gs.StateClaimed),
+		); err != nil {
+			return fmt.Errorf("postgres fail retry: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("postgres fail commit: %w", err)
 	}
 	return nil
 }
