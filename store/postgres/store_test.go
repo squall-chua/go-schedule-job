@@ -343,3 +343,54 @@ func TestPostgresStore_QueueSize(t *testing.T) {
 		t.Errorf("want 2, got %d", n)
 	}
 }
+
+func TestPostgresStore_RecurringCRUD(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	spec := gs.RecurringSpec{
+		ID: "r1", Name: "tick", Queue: "default", Every: time.Second, Priority: gs.PriorityNormal, MaxAttempts: 3,
+	}
+	if err := s.UpsertRecurring(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.ListRecurring(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ID != "r1" || list[0].Every != time.Second {
+		t.Fatalf("list mismatch: %+v", list)
+	}
+
+	spec.Name = "tock"
+	if err := s.UpsertRecurring(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = s.ListRecurring(ctx)
+	if list[0].Name != "tock" {
+		t.Errorf("upsert did not update name: %+v", list[0])
+	}
+
+	if err := s.DeleteRecurring(ctx, "r1"); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = s.ListRecurring(ctx)
+	if len(list) != 0 {
+		t.Errorf("expected empty list, got %+v", list)
+	}
+}
+
+func TestPostgresStore_UpdateRecurringNextRun(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	spec := gs.RecurringSpec{ID: "r1", Name: "t", Queue: "default", Every: time.Second}
+	_ = s.UpsertRecurring(ctx, spec)
+	next := now.Add(time.Minute)
+	if err := s.UpdateRecurringNextRun(ctx, "r1", next, now); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := s.ListRecurring(ctx)
+	if !list[0].NextRunAt.Equal(next) || !list[0].LastFireAt.Equal(now) {
+		t.Errorf("update did not apply: %+v", list[0])
+	}
+}

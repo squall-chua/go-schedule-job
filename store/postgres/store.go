@@ -356,6 +356,97 @@ func (s *Store) QueueSize(ctx context.Context, queue string) (int, error) {
 	return n, nil
 }
 
+const upsertRecurringSQL = `
+INSERT INTO recurring (
+    id, name, queue, payload, codec_name, priority, timeout_ns, max_attempts,
+    cron, every_ns, catchup, next_run_at, last_fire_at, lease_until, leased_by
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+ON CONFLICT (id) DO UPDATE SET
+    name=EXCLUDED.name,
+    queue=EXCLUDED.queue,
+    payload=EXCLUDED.payload,
+    codec_name=EXCLUDED.codec_name,
+    priority=EXCLUDED.priority,
+    timeout_ns=EXCLUDED.timeout_ns,
+    max_attempts=EXCLUDED.max_attempts,
+    cron=EXCLUDED.cron,
+    every_ns=EXCLUDED.every_ns,
+    catchup=EXCLUDED.catchup,
+    next_run_at=EXCLUDED.next_run_at,
+    last_fire_at=EXCLUDED.last_fire_at
+`
+
+const listRecurringSQL = `
+SELECT id, name, queue, payload, codec_name, priority, timeout_ns, max_attempts,
+       cron, every_ns, catchup, next_run_at, last_fire_at, lease_until, leased_by
+FROM recurring
+`
+
+const deleteRecurringSQL = `DELETE FROM recurring WHERE id = $1`
+
+const updateRecurringNextRunSQL = `
+UPDATE recurring SET next_run_at = $1, last_fire_at = $2 WHERE id = $3
+`
+
+func (s *Store) UpsertRecurring(ctx context.Context, spec gs.RecurringSpec) error {
+	if _, err := s.pool.Exec(ctx, upsertRecurringSQL,
+		string(spec.ID), spec.Name, spec.Queue, spec.Payload, spec.CodecName,
+		int(spec.Priority), int64(spec.Timeout), spec.MaxAttempts,
+		spec.Cron, int64(spec.Every), spec.Catchup,
+		spec.NextRunAt, spec.LastFireAt,
+		spec.LeaseUntil, spec.LeasedBy,
+	); err != nil {
+		return fmt.Errorf("postgres upsert recurring: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListRecurring(ctx context.Context) ([]gs.RecurringSpec, error) {
+	rows, err := s.pool.Query(ctx, listRecurringSQL)
+	if err != nil {
+		return nil, fmt.Errorf("postgres list recurring: %w", err)
+	}
+	defer rows.Close()
+	var out []gs.RecurringSpec
+	for rows.Next() {
+		var id, name, queue, codec, cron, leasedBy string
+		var payload []byte
+		var priority int16
+		var maxAttempts int32
+		var catch bool
+		var timeoutNs, everyNs int64
+		var nextRunAt, lastFireAt, leaseUntil time.Time
+		if err := rows.Scan(
+			&id, &name, &queue, &payload, &codec, &priority, &timeoutNs, &maxAttempts,
+			&cron, &everyNs, &catch, &nextRunAt, &lastFireAt, &leaseUntil, &leasedBy,
+		); err != nil {
+			return nil, fmt.Errorf("postgres list recurring scan: %w", err)
+		}
+		out = append(out, gs.RecurringSpec{
+			ID: gs.JobID(id), Name: name, Queue: queue, Payload: payload, CodecName: codec,
+			Priority: gs.Priority(priority), Timeout: time.Duration(timeoutNs), MaxAttempts: int(maxAttempts),
+			Cron: cron, Every: time.Duration(everyNs), Catchup: catch,
+			NextRunAt: nextRunAt, LastFireAt: lastFireAt,
+			LeaseUntil: leaseUntil, LeasedBy: leasedBy,
+		})
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DeleteRecurring(ctx context.Context, id gs.JobID) error {
+	if _, err := s.pool.Exec(ctx, deleteRecurringSQL, string(id)); err != nil {
+		return fmt.Errorf("postgres delete recurring: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) UpdateRecurringNextRun(ctx context.Context, id gs.JobID, nextRunAt, lastFireAt time.Time) error {
+	if _, err := s.pool.Exec(ctx, updateRecurringNextRunSQL, nextRunAt, lastFireAt, string(id)); err != nil {
+		return fmt.Errorf("postgres update recurring next: %w", err)
+	}
+	return nil
+}
+
 // scanJob reads a single row from ClaimDue's RETURNING projection. Accepts
 // pgx.Rows so it can be shared with future single-row helpers via pgx.Row.
 func scanJob(rows pgx.Rows) (gs.Job, error) {
