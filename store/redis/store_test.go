@@ -8,6 +8,7 @@ import (
 
 	gs "github.com/squall-chua/go-schedule-job"
 	"github.com/squall-chua/go-schedule-job/store/redis"
+	"github.com/squall-chua/go-schedule-job/storetest"
 )
 
 // openTestStore boots a fresh miniredis and returns a Store pointing at it.
@@ -375,4 +376,11 @@ func TestRedisStore_AcquireRecurringLeaseSameWorker(t *testing.T) {
 	if ok, _ := s.AcquireRecurringLease(ctx, "r1", now.Add(2*time.Minute), "w1"); !ok {
 		t.Fatal("same-worker re-acquire should succeed")
 	}
+}
+
+func TestRedisStore_Conformance(t *testing.T) {
+	storetest.Run(t, func(t *testing.T) (gs.Store, func()) {
+		s := openTestStore(t)
+		return s, func() {} // openTestStore registers cleanup via t.Cleanup
+	})
 }

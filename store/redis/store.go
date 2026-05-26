@@ -453,3 +453,6 @@ func (s *Store) AcquireRecurringLease(ctx context.Context, specID gs.JobID, leas
 	}
 	return n == 1, nil
 }
+
+// Compile-time check that *Store satisfies gs.Store.
+var _ gs.Store = (*Store)(nil)
