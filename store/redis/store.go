@@ -172,3 +172,31 @@ func (s *Store) ClaimDue(ctx context.Context, queue string, now time.Time, n int
 	}
 	return out, nil
 }
+
+var ackScript = redis.NewScript(`
+local job = KEYS[1]
+local claimed = KEYS[2]
+local id = ARGV[1]
+local state_claimed = ARGV[2]
+local state = redis.call('HGET', job, 'state')
+if state ~= state_claimed then
+    return 'missing'
+end
+redis.call('ZREM', claimed, id)
+redis.call('DEL', job)
+return 'ok'
+`)
+
+func (s *Store) Ack(ctx context.Context, id gs.JobID) error {
+	res, err := ackScript.Run(ctx, s.rdb,
+		[]string{jobKey(id), claimedKey},
+		string(id), strconv.Itoa(int(gs.StateClaimed)),
+	).Result()
+	if err != nil {
+		return fmt.Errorf("redis ack: %w", err)
+	}
+	if res != "ok" {
+		return gs.ErrJobNotFound
+	}
+	return nil
+}

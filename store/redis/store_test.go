@@ -89,3 +89,35 @@ func TestRedisStore_ClaimDueSkipsFutureJobs(t *testing.T) {
 		t.Errorf("future job claimed: %+v", got)
 	}
 }
+
+func TestRedisStore_Ack(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	_ = s.Save(ctx, gs.Job{ID: "j", Queue: "default", Name: "n", RunAt: now, State: gs.StatePending, MaxAttempts: 3, CreatedAt: now})
+	_, _ = s.ClaimDue(ctx, "default", now, 1, "w", now.Add(time.Minute))
+
+	if err := s.Ack(ctx, "j"); err != nil {
+		t.Fatalf("Ack: %v", err)
+	}
+	got, _ := s.ClaimDue(ctx, "default", now.Add(time.Hour), 10, "w", now.Add(time.Hour).Add(time.Minute))
+	if len(got) != 0 {
+		t.Errorf("acked job reappeared: %+v", got)
+	}
+}
+
+func TestRedisStore_AckMissing(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.Ack(t.Context(), "missing"); err != gs.ErrJobNotFound {
+		t.Errorf("want ErrJobNotFound, got %v", err)
+	}
+}
+
+func TestRedisStore_AckPending(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	_ = s.Save(ctx, gs.Job{ID: "j", Queue: "default", Name: "n", RunAt: time.Now(), State: gs.StatePending, MaxAttempts: 3})
+	if err := s.Ack(ctx, "j"); err != gs.ErrJobNotFound {
+		t.Errorf("want ErrJobNotFound for pending Ack, got %v", err)
+	}
+}
