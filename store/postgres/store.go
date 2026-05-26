@@ -447,6 +447,38 @@ func (s *Store) UpdateRecurringNextRun(ctx context.Context, id gs.JobID, nextRun
 	return nil
 }
 
+// Expiry uses now() (DB-side) so concurrent schedulers with skewed wall
+// clocks agree on whether a lease is still valid. The `leased_by = $4`
+// disjunct lets the same worker extend a lease it already holds.
+const acquireLeaseSQL = `
+UPDATE recurring SET lease_until = $1, leased_by = $2
+WHERE id = $3
+  AND (lease_until = '0001-01-01 00:00:00+00' OR lease_until < now() OR leased_by = $4)
+`
+
+const leaseSpecExistsSQL = `SELECT 1 FROM recurring WHERE id = $1`
+
+func (s *Store) AcquireRecurringLease(ctx context.Context, specID gs.JobID, leaseUntil time.Time, workerID string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, acquireLeaseSQL,
+		leaseUntil, workerID, string(specID), workerID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("postgres acquire lease: %w", err)
+	}
+	if tag.RowsAffected() > 0 {
+		return true, nil
+	}
+	var one int
+	if err := s.pool.QueryRow(ctx, leaseSpecExistsSQL, string(specID)).Scan(&one); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// No such spec — treat as acquirable (matches in-memory store semantics).
+			return true, nil
+		}
+		return false, fmt.Errorf("postgres acquire lease exists: %w", err)
+	}
+	return false, nil
+}
+
 // scanJob reads a single row from ClaimDue's RETURNING projection. Accepts
 // pgx.Rows so it can be shared with future single-row helpers via pgx.Row.
 func scanJob(rows pgx.Rows) (gs.Job, error) {
