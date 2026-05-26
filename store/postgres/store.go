@@ -281,6 +281,35 @@ func (s *Store) Cancel(ctx context.Context, id gs.JobID) error {
 	return nil
 }
 
+const rescheduleSelectSQL = `SELECT state FROM jobs WHERE id = $1`
+const rescheduleUpdateSQL = `UPDATE jobs SET run_at = $1, updated_at = $2 WHERE id = $3`
+
+func (s *Store) Reschedule(ctx context.Context, id gs.JobID, newTime time.Time) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("postgres reschedule begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var state int16
+	row := tx.QueryRow(ctx, rescheduleSelectSQL, string(id))
+	if err := row.Scan(&state); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return gs.ErrJobNotFound
+		}
+		return fmt.Errorf("postgres reschedule select: %w", err)
+	}
+	if gs.State(state) != gs.StatePending {
+		return gs.ErrJobNotPending
+	}
+	if _, err := tx.Exec(ctx, rescheduleUpdateSQL, newTime, time.Now(), string(id)); err != nil {
+		return fmt.Errorf("postgres reschedule update: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("postgres reschedule commit: %w", err)
+	}
+	return nil
+}
+
 // scanJob reads a single row from ClaimDue's RETURNING projection. Accepts
 // pgx.Rows so it can be shared with future single-row helpers via pgx.Row.
 func scanJob(rows pgx.Rows) (gs.Job, error) {
