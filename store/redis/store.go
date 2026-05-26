@@ -258,3 +258,35 @@ func (s *Store) Cancel(ctx context.Context, id gs.JobID) error {
 		return fmt.Errorf("redis cancel: unexpected script result %v", res)
 	}
 }
+
+func (s *Store) Reschedule(ctx context.Context, id gs.JobID, newTime time.Time) error {
+	fields, err := s.rdb.HMGet(ctx, jobKey(id), "queue", "priority").Result()
+	if err != nil {
+		return fmt.Errorf("redis reschedule lookup: %w", err)
+	}
+	if fields[0] == nil {
+		return gs.ErrJobNotFound
+	}
+	queue, _ := fields[0].(string)
+	priorityStr, _ := fields[1].(string)
+	priority := gs.Priority(asInt(priorityStr))
+
+	res, err := rescheduleScript.Run(ctx, s.rdb,
+		[]string{jobKey(id), pendingKey(queue, priority)},
+		string(id), formatTime(newTime), formatTime(time.Now()),
+		strconv.Itoa(int(gs.StatePending)),
+	).Result()
+	if err != nil {
+		return fmt.Errorf("redis reschedule: %w", err)
+	}
+	switch res {
+	case "ok":
+		return nil
+	case "missing":
+		return gs.ErrJobNotFound
+	case "not_pending":
+		return gs.ErrJobNotPending
+	default:
+		return fmt.Errorf("redis reschedule: unexpected script result %v", res)
+	}
+}

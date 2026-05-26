@@ -200,3 +200,35 @@ func TestRedisStore_CancelMissing(t *testing.T) {
 		t.Errorf("want ErrJobNotFound, got %v", err)
 	}
 }
+
+func TestRedisStore_Reschedule(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	_ = s.Save(ctx, gs.Job{ID: "j", Queue: "default", Name: "n", RunAt: now.Add(time.Hour), State: gs.StatePending, MaxAttempts: 3})
+	if err := s.Reschedule(ctx, "j", now); err != nil {
+		t.Fatalf("Reschedule: %v", err)
+	}
+	got, _ := s.ClaimDue(ctx, "default", now, 10, "w", now.Add(time.Minute))
+	if len(got) != 1 {
+		t.Errorf("rescheduled job not claimable: %+v", got)
+	}
+}
+
+func TestRedisStore_RescheduleClaimedRejected(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	_ = s.Save(ctx, gs.Job{ID: "j", Queue: "default", Name: "n", RunAt: now, State: gs.StatePending, MaxAttempts: 3})
+	_, _ = s.ClaimDue(ctx, "default", now, 1, "w", now.Add(time.Minute))
+	if err := s.Reschedule(ctx, "j", now); err != gs.ErrJobNotPending {
+		t.Errorf("want ErrJobNotPending, got %v", err)
+	}
+}
+
+func TestRedisStore_RescheduleMissing(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.Reschedule(t.Context(), "missing", time.Now()); err != gs.ErrJobNotFound {
+		t.Errorf("want ErrJobNotFound, got %v", err)
+	}
+}
