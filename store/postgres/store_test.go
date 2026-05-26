@@ -231,3 +231,34 @@ func TestPostgresStore_FailPending(t *testing.T) {
 		t.Errorf("want ErrJobNotFound for pending Fail, got %v", err)
 	}
 }
+
+func TestPostgresStore_CancelPending(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	_ = s.Save(ctx, gs.Job{ID: "j", Queue: "default", Name: "n", RunAt: time.Now(), State: gs.StatePending})
+	if err := s.Cancel(ctx, "j"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	got, _ := s.ClaimDue(ctx, "default", time.Now(), 10, "w", time.Now().Add(time.Minute))
+	if len(got) != 0 {
+		t.Errorf("cancelled job reappeared: %+v", got)
+	}
+}
+
+func TestPostgresStore_CancelClaimedRejected(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	_ = s.Save(ctx, gs.Job{ID: "j", Queue: "default", Name: "n", RunAt: now, State: gs.StatePending, MaxAttempts: 3})
+	_, _ = s.ClaimDue(ctx, "default", now, 1, "w", now.Add(time.Minute))
+	if err := s.Cancel(ctx, "j"); err != gs.ErrJobNotPending {
+		t.Errorf("want ErrJobNotPending, got %v", err)
+	}
+}
+
+func TestPostgresStore_CancelMissing(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.Cancel(t.Context(), "missing"); err != gs.ErrJobNotFound {
+		t.Errorf("want ErrJobNotFound, got %v", err)
+	}
+}

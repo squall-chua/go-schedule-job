@@ -252,6 +252,35 @@ func (s *Store) Fail(ctx context.Context, id gs.JobID, errMsg string, nextAttemp
 	return nil
 }
 
+const cancelSelectSQL = `SELECT state FROM jobs WHERE id = $1`
+const cancelDeleteSQL = `DELETE FROM jobs WHERE id = $1`
+
+func (s *Store) Cancel(ctx context.Context, id gs.JobID) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("postgres cancel begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var state int16
+	row := tx.QueryRow(ctx, cancelSelectSQL, string(id))
+	if err := row.Scan(&state); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return gs.ErrJobNotFound
+		}
+		return fmt.Errorf("postgres cancel select: %w", err)
+	}
+	if gs.State(state) != gs.StatePending {
+		return gs.ErrJobNotPending
+	}
+	if _, err := tx.Exec(ctx, cancelDeleteSQL, string(id)); err != nil {
+		return fmt.Errorf("postgres cancel delete: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("postgres cancel commit: %w", err)
+	}
+	return nil
+}
+
 // scanJob reads a single row from ClaimDue's RETURNING projection. Accepts
 // pgx.Rows so it can be shared with future single-row helpers via pgx.Row.
 func scanJob(rows pgx.Rows) (gs.Job, error) {
